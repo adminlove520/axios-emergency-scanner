@@ -2,6 +2,12 @@
 
 所有对 `axios-emergency-scanner` 的重要更改都记录在本文档中。
 
+## [1.3.1] - 2026-03-31
+
+### ⚙️ 优化与修复
+- **修复 Windows 权限错误**: 改进了 `glob` 扫描逻辑，增加了 `strict: false`、`silent: true` 和 `follow: false` 配置。
+- **防止循环路径**: 在 Windows 环境下，现在会跳过 `AppData` 等可能导致 `EPERM` 或死循环的特殊系统连接点，从而支持在用户根目录 (`C:\Users\Name`) 下直接运行。
+
 ## [1.3.0] - 2026-03-31
 
 ### ✨ 新特性

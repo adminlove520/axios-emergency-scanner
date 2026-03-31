@@ -153,8 +153,24 @@ function scanProjects(rootPath) {
     printSection(`2. 本地项目深度审计 (递归): ${rootPath}`);
     const result = { safe: true, projects: [], maliciousPkgs: [], lockIssues: [] };
 
-    const files = glob.sync('**/package.json', { cwd: rootPath, ignore: '**/node_modules/**', absolute: true });
-    const lockFiles = glob.sync('**/{package-lock.json,yarn.lock,pnpm-lock.yaml}', { cwd: rootPath, ignore: '**/node_modules/**', absolute: true });
+    const globOptions = { 
+        cwd: rootPath, 
+        ignore: ['**/node_modules/**', '**/AppData/**', '**/Local Settings/**'], 
+        absolute: true,
+        strict: false,
+        silent: true,
+        nodir: false,
+        follow: false // 关键：禁止追踪符号链接/挂载点，防止 Windows 循环路径
+    };
+
+    let files = [];
+    let lockFiles = [];
+    try {
+        files = glob.sync('**/package.json', globOptions);
+        lockFiles = glob.sync('**/{package-lock.json,yarn.lock,pnpm-lock.yaml}', globOptions);
+    } catch (e) {
+        console.log(chalk.red(`  ❌ 扫描过程中出错 (权限不足): ${e.message}`));
+    }
 
     for (const pkgFile of files) {
         try {
@@ -281,7 +297,7 @@ function checkNpmCache() {
             try {
                 for (const malPkg of MALICIOUS_PACKAGES) {
                     const pattern = path.join(cachePath, '**', malPkg);
-                    const matches = glob.sync(pattern, { nodir: false });
+                    const matches = glob.sync(pattern, { nodir: false, strict: false, follow: false, silent: true });
                     if (matches.length > 0) {
                         for (const match of matches) {
                             console.log(chalk.red(`  ❌ 缓存污染: 发现恶意包缓存 ${match}`));
