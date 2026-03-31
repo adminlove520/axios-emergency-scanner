@@ -31,7 +31,7 @@ npm install
 npm run scan
 
 # Run scanner on a specific directory
-node index.js /path/to/projects
+node bin/axios-scan.js /path/to/projects
 
 # Automatic fix
 npm run fix
@@ -40,13 +40,13 @@ npm run fix
 ### Using Bash (Linux/macOS)
 
 ```bash
-./axios-security-scan.sh [project_path]
+./scripts/axios-security-scan.sh [project_path]
 ```
 
 ### Using PowerShell (Windows)
 
 ```powershell
-.\axios-security-scan.ps1 [project_path]
+.\scripts\axios-security-scan.ps1 [project_path]
 ```
 
 ## Remediation Steps

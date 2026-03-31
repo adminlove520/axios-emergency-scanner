@@ -1,21 +1,36 @@
 {
   "name": "axios-emergency-scanner",
-  "version": "1.0.0",
-  "description": "Emergency scanner for axios supply chain poisoning (versions 1.14.1, 0.30.4)",
-  "main": "index.js",
+  "version": "1.2.0",
+  "description": "axios 供应链投毒事件应急审计工具 (2026-03-31)",
+  "main": "bin/axios-scan.js",
   "bin": {
-    "axios-scan": "./index.js"
+    "axios-scan": "bin/axios-scan.js"
+  },
+  "files": [
+    "bin",
+    "scripts",
+    "README.md",
+    "README_CN.md",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
-    "scan": "node index.js",
-    "fix": "node index.js --fix"
+    "scan": "node bin/axios-scan.js",
+    "fix": "node bin/axios-scan.js --fix"
   },
   "keywords": [
     "axios",
     "security",
     "scanner",
     "supply-chain",
-    "malware"
+    "malware",
+    "emergency"
   ],
   "author": "adminlove520",
   "license": "MIT",
