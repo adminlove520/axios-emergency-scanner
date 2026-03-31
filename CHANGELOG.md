@@ -2,6 +2,19 @@
 
 所有对 `axios-emergency-scanner` 的重要更改都记录在本文档中。
 
+## [1.5.1] - 2026-03-31
+
+### ✨ 威胁情报更新 (Threat Intel Update)
+- **集成 StepSecurity 深度分析成果**:
+    - **新增 C2 域名**: `sfrclak.com`。
+    - **新增 C2 IP 审计**: 扫描活动网络连接中的恶意 IP `142.11.206.73`。
+    - **新增活动 ID 审计**: 扫描包含恶意 Campaign ID `6202033` 的脚本和临时文件。
+- **增强型反取证审计**:
+    - 即使 `plain-crypto-js` 的 `package.json` 被恶意脚本清理覆盖，工具现在也能通过检测 `node_modules/plain-crypto-js` 目录及反取证残留文件 `package.md` 来确认投毒迹象。
+- **系统级 RAT 指标增强**:
+    - Windows 平台：增加了对 `%TEMP%` 目录下 `6202033.vbs` 和 `6202033.ps1` 临时文件的扫描。
+    - 增强了对 `%PROGRAMDATA%\wt.exe` (伪装成终端的 PowerShell 拷贝) 的检测。
+
 ## [1.5.0] - 2026-03-31
 
 ### ✨ 新特性

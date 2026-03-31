@@ -39,7 +39,13 @@ const MALICIOUS_DOMAINS = [
     "claw-sync.net",
     "open-claw.com",
     "open-claw.org",
-    "api.openclaw.io"
+    "api.openclaw.io",
+    "sfrclak.com"
+];
+
+// 已知恶意 IP (Known Malicious IPs)
+const MALICIOUS_IPS = [
+    "142.11.206.73"
 ];
 
 // 系统层面的恶意后门留痕 (System-level RAT IOCs)
@@ -210,6 +216,26 @@ function scanProjects(rootPath) {
                             result.safe = false;
                         }
                     }
+                    if (scriptCmd.includes('6202033')) {
+                        console.log(chalk.red(`  ❌ 恶意脚本: 在 ${pkgFile} 的 "${scriptName}" 脚本中发现恶意活动 ID 6202033`));
+                        projectResult.issues.push(`脚本 "${scriptName}" 包含恶意活动 ID 6202033`);
+                        result.safe = false;
+                    }
+                }
+            }
+
+            // 特殊检查: 检查 node_modules 中的 plain-crypto-js 是否存在 (即使已被 cleanup)
+            const nodeModulesPath = path.join(path.dirname(pkgFile), 'node_modules');
+            const plainCryptoPath = path.join(nodeModulesPath, 'plain-crypto-js');
+            if (fs.existsSync(plainCryptoPath)) {
+                console.log(chalk.red(`  ❌ 发现高危组件目录: ${plainCryptoPath}`));
+                projectResult.issues.push(`存在 plain-crypto-js 目录 (高危)`);
+                result.safe = false;
+
+                // 检查 cleanup 痕迹 (package.md)
+                if (fs.existsSync(path.join(plainCryptoPath, 'package.md'))) {
+                    console.log(chalk.red(`  ❌ 发现反取证痕迹: ${plainCryptoPath} 包含 package.md (确认为投毒执行后状态)`));
+                    projectResult.issues.push(`发现 plain-crypto-js 的反取证 cleanup 痕迹 (package.md)`);
                 }
             }
             if (projectResult.issues.length > 0) result.projects.push(projectResult);
@@ -233,8 +259,35 @@ function checkRAT() {
     for (const artifact of artifacts) {
         if (fs.existsSync(artifact)) {
             console.log(chalk.red(`  ❌ 发现高危后门留痕: ${artifact}`));
+            
+            // 特殊逻辑：Windows 的 wt.exe 可能是伪造的 PowerShell
+            if (platform === 'win32' && artifact.toLowerCase().endsWith('wt.exe')) {
+                try {
+                    const stats = fs.statSync(artifact);
+                    if (stats.size > 0) {
+                        console.log(chalk.red(`     🚨 警告：${artifact} 疑似为伪装成 Windows Terminal 的恶意 PowerShell 拷贝`));
+                    }
+                } catch (e) {}
+            }
+            
             result.found.push(artifact);
             result.safe = false;
+        }
+    }
+
+    // 检查活动 ID 相关文件 (如 Windows 下的 %TEMP%\6202033.vbs)
+    if (platform === 'win32') {
+        const tempDir = process.env.TEMP || 'C:\\Windows\\Temp';
+        const campaignFiles = [
+            path.join(tempDir, '6202033.vbs'),
+            path.join(tempDir, '6202033.ps1')
+        ];
+        for (const cf of campaignFiles) {
+            if (fs.existsSync(cf)) {
+                console.log(chalk.red(`  ❌ 发现恶意活动文件: ${cf}`));
+                result.found.push(cf);
+                result.safe = false;
+            }
         }
     }
 
@@ -319,6 +372,15 @@ function checkActiveConnections() {
                         console.log(chalk.red(`  ❌ 发现活动外联: ${remoteAddr} (PID: ${pid})`));
                         console.log(chalk.red(`     落地文件: ${filePath}`));
                         result.connections.push({ domain, remoteAddr, pid, filePath, raw: line.trim() });
+                        result.safe = false;
+                    }
+                }
+                for (const ip of MALICIOUS_IPS) {
+                    if (remoteAddr.includes(ip)) {
+                        const filePath = getProcessPath(pid);
+                        console.log(chalk.red(`  ❌ 发现活动 IP 外联: ${remoteAddr} (PID: ${pid})`));
+                        console.log(chalk.red(`     落地文件: ${filePath}`));
+                        result.connections.push({ domain: 'Known Malicious IP', remoteAddr, pid, filePath, raw: line.trim() });
                         result.safe = false;
                     }
                 }
@@ -565,7 +627,9 @@ function generateMarkdownReport(results) {
     md += `## 3. 威胁指标分析 (Threat Indicators)\n\n`;
     md += `- **投毒版本**: \`axios@1.14.1\`, \`axios@0.30.4\`\n`;
     md += `- **核心恶意包**: \`plain-crypto-js\`, \`axios-checker-utils\`\n`;
-    md += `- **已知 C2 域名**: \`axios-updates.com\`, \`npm-security.org\`, \`claw-sync.net\`\n\n`;
+    md += `- **已知 C2 域名**: \`axios-updates.com\`, \`npm-security.org\`, \`claw-sync.net\`, \`sfrclak.com\`\n`;
+    md += `- **已知 C2 IP**: \`142.11.206.73\`\n`;
+    md += `- **恶意活动 ID**: \`6202033\`\n\n`;
 
     md += `## 4. 处置与加固建议 (Remediation)\n\n`;
     md += `### 第一阶段：紧急清理 (Immediate Action)\n`;

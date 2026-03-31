@@ -8,6 +8,8 @@ On March 31, 2026, a maintainer account of the popular `axios` library was compr
 
 ## Features
 
+- **StepSecurity Threat Intel Integration (v1.5.1+)**: Includes confirmed C2 domain `sfrclak.com`, malicious IP `142.11.206.73`, and campaign ID `6202033`.
+- **Anti-Forensics Cleanup Detection (v1.5.1+)**: Detects infections even if the malicious script attempted to hide its tracks by overwriting `package.json`.
 - **Multi-platform support**: Includes scripts for Windows (PowerShell), Linux/macOS (Bash), and a unified Node.js CLI.
 - **Network C2 Live Audit (v1.5.0+)**: Real-time detection of active C2 outbound connections (e.g., `axios-updates.com`).
 - **Process-File Correlation (v1.5.0+)**: Automatically maps active malicious connections to their originating local processes and filesystem paths.
