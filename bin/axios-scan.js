@@ -9,6 +9,9 @@ const glob = require('glob');
 const os = require('os');
 const https = require('https');
 
+// 从 package.json 动态获取版本号
+const pkg = require('../package.json');
+
 const program = new Command();
 
 // ========== 威胁情报 (Threat Intel) ==========
@@ -809,7 +812,7 @@ function generateMarkdownReport(results) {
 // ========== 审计执行 (Audit Runner) ==========
 async function runAudit(scanRoot, options) {
     const results = {
-        version: '1.5.2',
+        version: pkg.version,
         timestamp: new Date().toISOString(),
         platform: process.platform,
         hostname: os.hostname(),
@@ -858,7 +861,7 @@ async function runAudit(scanRoot, options) {
 program
     .name('axios-scan')
     .description('axios & OpenClaw 供应链投毒事件应急审计工具')
-    .version('1.5.4')
+    .version(pkg.version)
     .argument('[path]', '待扫描的路径', '.')
     .option('--fix', '自动修复发现的 axios 投毒版本')
     .option('--json [file]', '生成 JSON 审计报告')
