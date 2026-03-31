@@ -186,17 +186,26 @@ function queryAbuseIPDB(ip) {
  * 综合威胁研判入口
  */
 async function judgeIOC(ioc) {
+    if (!ioc) return null;
+    
     // 1. 先查 ThreatFox (C2 专项)
     const tfResult = await queryThreatFox(ioc);
-    if (tfResult) return tfResult;
+    if (tfResult) {
+        console.log(chalk.red(`     🚨 [ThreatFox] 确认恶意指标: ${tfResult.details}`));
+        return tfResult;
+    }
 
     // 2. 如果是 IP，再查 AbuseIPDB
     const isIP = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(ioc);
     if (isIP) {
         const abuseResult = await queryAbuseIPDB(ioc);
-        if (abuseResult) return abuseResult;
+        if (abuseResult) {
+            console.log(chalk.yellow(`     ⚠️  [AbuseIPDB] 可疑 IP (恶意得分: ${abuseResult.score}%)`));
+            return abuseResult;
+        }
     }
 
+    console.log(chalk.green(`     ✅ [Cloud] 未在已知情报库中发现 ${ioc} 的异常记录`));
     return null;
 }
 function printHeader(title) {
@@ -473,20 +482,29 @@ async function checkActiveConnections(options = {}) {
         if (platform === 'win32') {
             output = execSync('netstat -ano', { stdio: ['ignore', 'pipe', 'ignore'] }).toString();
             const lines = output.split('\n');
+            const processedIPs = new Set(); // 避免重复研判同一个 IP
+
             for (const line of lines) {
                 const trimmedLine = line.trim();
                 if (!trimmedLine) continue;
 
                 const parts = trimmedLine.split(/\s+/);
-                // 即使没有 PID (parts.length < 5)，只要匹配到特征也应该报警
-                const remoteAddr = (parts[2] || '').split(':')[0]; // 提取 IP
+                const fullRemoteAddr = parts[2] || '';
+                const remoteAddr = fullRemoteAddr.split(':')[0]; // 提取 IP
                 const pid = parts[4] || 'Unknown';
                 
+                // 基础过滤：排除无效 IP 和局域网地址
+                if (!remoteAddr || remoteAddr === '0.0.0.0' || remoteAddr === '*' || remoteAddr === '::' || 
+                    remoteAddr.startsWith('127.') || remoteAddr.startsWith('192.168.') || 
+                    remoteAddr.startsWith('10.') || remoteAddr.startsWith('172.')) {
+                    continue;
+                }
+
                 let matched = false;
                 let matchType = '';
                 let matchTarget = '';
 
-                // 1. 本地特征库匹配
+                // 1. 本地特征库匹配 (最高优先级)
                 for (const domain of MALICIOUS_DOMAINS) {
                     if (trimmedLine.includes(domain)) {
                         matched = true;
@@ -498,7 +516,7 @@ async function checkActiveConnections(options = {}) {
                 
                 if (!matched) {
                     for (const ip of MALICIOUS_IPS) {
-                        if (trimmedLine.includes(ip)) {
+                        if (remoteAddr === ip) {
                             matched = true;
                             matchType = 'IP (Internal)';
                             matchTarget = ip;
@@ -507,27 +525,34 @@ async function checkActiveConnections(options = {}) {
                     }
                 }
 
-                // 2. 如果开启了 --judge，对未知外联进行云端研判
+                // 2. 交互式或自动云端研判 (根据用户指定的 IP 范围进行研判)
                 let judgeResult = null;
-                if (!matched && options.judge && remoteAddr && remoteAddr !== '0.0.0.0' && !remoteAddr.startsWith('127.') && !remoteAddr.startsWith('192.168.')) {
-                    console.log(chalk.gray(`  🔍 正在研判未知外联: ${remoteAddr}...`));
-                    judgeResult = await judgeIOC(remoteAddr);
-                    if (judgeResult) {
-                        matched = true;
-                        matchType = `Cloud (${judgeResult.source})`;
-                        matchTarget = remoteAddr;
+                const judgeTarget = options.judge === true ? MALICIOUS_IPS : (typeof options.judge === 'string' ? options.judge.split(',') : []);
+
+                if (options.judge && !processedIPs.has(remoteAddr)) {
+                    // 如果用户开启了 --judge (默认只查黑名单 IP)，或者当前 IP 在用户指定的列表内，则进行研判
+                    if (judgeTarget.includes(remoteAddr) || (options.judge === true && matched)) {
+                        console.log(chalk.gray(`  🔍 正在研判异常外联: ${remoteAddr}...`));
+                        judgeResult = await judgeIOC(remoteAddr);
+                        processedIPs.add(remoteAddr);
                     }
                 }
 
                 if (matched) {
                     const filePath = pid !== 'Unknown' ? getProcessPath(pid) : 'Cannot resolve without PID';
                     console.log(chalk.red(`  ❌ [${matchType}] 发现活动外联: ${matchTarget}`));
-                    if (judgeResult) console.log(chalk.yellow(`     研判详情: ${judgeResult.details}`));
-                    console.log(chalk.red(`     详情: ${trimmedLine}`));
+                    
+                    if (judgeResult) {
+                        console.log(chalk.yellow(`     [云端研判结果] 来源: ${judgeResult.source}`));
+                        console.log(chalk.yellow(`     [风险详情] ${judgeResult.details}`));
+                        if (judgeResult.score) console.log(chalk.yellow(`     [恶意得分] ${judgeResult.score}%`));
+                    }
+
+                    console.log(chalk.red(`     连接详情: ${trimmedLine}`));
                     if (pid !== 'Unknown') console.log(chalk.red(`     落地文件: ${filePath} (PID: ${pid})`));
                     
                     result.connections.push({ 
-                        domain: matchType.includes('Domain') ? matchTarget : (judgeResult ? judgeResult.source : 'Known Malicious IP'), 
+                        domain: matchType.includes('Domain') ? matchTarget : (judgeResult ? `${matchTarget} (${judgeResult.source})` : matchTarget), 
                         remoteAddr: matchTarget, 
                         pid, 
                         filePath, 
@@ -538,8 +563,7 @@ async function checkActiveConnections(options = {}) {
                 }
             }
         } else {
-            // Linux/macOS 部分逻辑同步优化 (省略部分，保持结构)
-            // ... (可以根据需要进一步完善)
+            // Linux/macOS 同步逻辑 (略)
         }
     } catch (e) {
         console.log(chalk.gray(`  Skip: 无法执行网络审计 (${e.message})`));
@@ -840,7 +864,7 @@ program
     .option('--json [file]', '生成 JSON 审计报告')
     .option('--md [file]', '生成精美的 Markdown 审计报告')
     .option('--watch [interval]', '持续监听模式，每隔 N 秒执行一次网络连接审计 (默认 10 秒)')
-    .option('--judge', '开启云端威胁研判 (集成 ThreatFox & AbuseIPDB)')
+    .option('--judge [ips]', '对特定风险 IP 开启云端威胁研判 (多个 IP 用逗号隔开)')
     .action(async (targetPath, options) => {
         const scanRoot = targetPath === '.' ? process.cwd() : path.resolve(targetPath);
         
