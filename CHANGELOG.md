@@ -2,6 +2,12 @@
 
 所有对 `axios-emergency-scanner` 的重要更改都记录在本文档中。
 
+## [1.5.5] - 2026-03-31
+
+### 🛠️ 工具健壮性提升 (Robustness & Cleanup)
+- **全面动态版本化**: 彻底重构了 `bin/axios-scan.js`，移除了所有硬编码的版本号字符串。现在无论是 CLI 输出还是报告生成，都将动态读取 `package.json` 中的版本号。
+- **发布冲突修复**: 解决了由于 NPM 版本冲突导致的自动发布失败问题。
+
 ## [1.5.4] - 2026-03-31
 
 ### ✨ 威胁研判优化 (Cloud Intelligence Refined)
