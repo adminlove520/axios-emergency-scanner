@@ -321,34 +321,154 @@ function checkNpmCache() {
     return result;
 }
 
+// ========== 报告生成 (Report Generation) ==========
+
+/**
+ * 生成精美的 Markdown 审计报告
+ */
+function generateMarkdownReport(results) {
+    const isSafe = results.globalAudit.safe && results.systemAudit.safe && 
+                   results.openClawAudit.safe && results.projectAudit.safe && 
+                   results.cacheAudit.safe && results.networkAudit.safe;
+
+    let md = `# axios & OpenClaw 供应链投毒应急审计报告\n\n`;
+    md += `> **审计时间**: ${new Date(results.timestamp).toLocaleString()}\n`;
+    md += `> **扫描范围**: \`${results.targetPath}\`\n`;
+    md += `> **系统环境**: ${results.platform} (${results.hostname})\n\n`;
+
+    md += `## 1. 审计结论 (Executive Summary)\n\n`;
+    if (isSafe) {
+        md += `### 🟢 结论：未发现已知威胁\n\n`;
+        md += `经过全方位审计，当前系统环境中**未发现**与 2026-03-31 axios 投毒事件或 OpenClaw 相关的恶意代码、后门及配置劫持。系统当前处于安全状态。\n\n`;
+    } else {
+        md += `### 🔴 结论：发现安全威胁 (COMPROMISED)\n\n`;
+        md += `**警告**：审计过程中发现了已确认的供应链投毒迹象或系统后门。建议立即按照本文档第 4 章节的建议进行应急处置。\n\n`;
+    }
+
+    md += `| 审计项 | 状态 | 详细结果 |\n`;
+    md += `| :--- | :--- | :--- |\n`;
+    md += `| 全局 NPM 包 | ${results.globalAudit.safe ? '✅ 安全' : '❌ 风险'} | 发现 ${results.globalAudit.packages.filter(p => !p.safe).length} 个异常包 |\n`;
+    md += `| 系统后门 (RAT) | ${results.systemAudit.safe ? '✅ 安全' : '❌ 风险'} | 发现 ${results.systemAudit.found.length} 个恶意文件 |\n`;
+    md += `| 网络劫持 (Hosts) | ${results.networkAudit.safe ? '✅ 安全' : '❌ 风险'} | ${results.networkAudit.issues.length} 处配置异常 |\n`;
+    md += `| 本地项目审计 | ${results.projectAudit.safe ? '✅ 安全' : '❌ 风险'} | 发现 ${results.projectAudit.projects.length} 个受影响项目 |\n`;
+    md += `| NPM 缓存完整性 | ${results.cacheAudit.safe ? '✅ 安全' : '❌ 风险'} | ${results.cacheAudit.infections.length} 处缓存污染 |\n\n`;
+
+    md += `## 2. 详细审计详情 (Detailed Findings)\n\n`;
+
+    // 2.1 全局包
+    md += `### 2.1 全局 NPM 包审计\n`;
+    if (results.globalAudit.packages.length > 0) {
+        md += `| 包名 | 版本 | 状态 | 来源 |\n`;
+        md += `| :--- | :--- | :--- | :--- |\n`;
+        results.globalAudit.packages.forEach(p => {
+            md += `| ${p.name} | ${p.version} | ${p.safe ? '✅ Safe' : '❌ **MALICIOUS**'} | ${p.location} |\n`;
+        });
+    } else {
+        md += `*未在全局发现相关的 NPM 包。*\n`;
+    }
+    md += `\n`;
+
+    // 2.2 系统留痕
+    md += `### 2.2 系统恶意软件 (RAT) 留痕\n`;
+    if (results.systemAudit.found.length > 0) {
+        md += `在系统中发现了以下已知的恶意后门或指标文件：\n\n`;
+        results.systemAudit.found.forEach(f => md += `- \`${f}\` (**危险**)\n`);
+    } else {
+        md += `*未发现已知的系统级 RAT 留痕文件。*\n`;
+    }
+    md += `\n`;
+
+    // 2.3 网络审计
+    md += `### 2.3 网络配置与域名审计\n`;
+    if (results.networkAudit.issues.length > 0) {
+        md += `发现以下网络劫持或恶意域名指向：\n\n`;
+        results.networkAudit.issues.forEach(issue => md += `- 🚨 ${issue}\n`);
+    } else {
+        md += `✅ 系统 Hosts 文件及 DNS 劫持审计通过。\n`;
+    }
+    md += `\n`;
+
+    // 2.4 OpenClaw
+    md += `### 2.4 OpenClaw 平台专项审计\n`;
+    if (results.openClawAudit.safe) {
+        md += `✅ 已识别的 OpenClaw 平台组件及其内部依赖项审计通过，未发现投毒。 (实例路径: \`${results.openClawAudit.components.length > 0 ? results.openClawAudit.components[0].path : '未发现'}\`)\n`;
+    } else {
+        md += `❌ **警告**：在 OpenClaw 平台实例内部发现了受污染的组件，请立即清理平台安装目录。\n`;
+    }
+    md += `\n`;
+
+    // 2.5 项目审计
+    md += `### 2.5 本地项目及 Workspace 审计\n`;
+    if (results.projectAudit.projects.length > 0) {
+        results.projectAudit.projects.forEach(proj => {
+            md += `#### 项目路径: \`${proj.path}\`\n`;
+            md += `发现的问题清单：\n`;
+            proj.issues.forEach(issue => md += `- 🚨 ${issue}\n`);
+            md += `\n`;
+        });
+    } else {
+        md += `✅ 扫描到的所有本地 Node.js 项目均未发现投毒特征。\n`;
+    }
+    md += `\n`;
+
+    md += `## 3. 威胁指标分析 (Threat Indicators)\n\n`;
+    md += `- **投毒版本**: \`axios@1.14.1\`, \`axios@0.30.4\`\n`;
+    md += `- **核心恶意包**: \`plain-crypto-js\`, \`axios-checker-utils\`\n`;
+    md += `- **已知 C2 域名**: \`axios-updates.com\`, \`npm-security.org\`, \`claw-sync.net\`\n\n`;
+
+    md += `## 4. 处置与加固建议 (Remediation)\n\n`;
+    md += `### 第一阶段：紧急清理 (Immediate Action)\n`;
+    md += `1. **隔离系统**: 若发现系统级 RAT 留痕，请立即断开物理网络。\n`;
+    md += `2. **物理删除**: 立即删除审计报告中标记为 \`❌\` 的所有文件和目录。\n`;
+    md += `3. **缓存清理**: 强制运行 \`npm cache clean --force\`。\n\n`;
+
+    md += `### 第二阶段：修复项目 (Project Fix)\n`;
+    md += `1. **强制降级**: 将所有项目的 axios 版本手动锁定为 \`1.14.0\` 或 \`0.30.3\`。\n`;
+    md += `2. **版本锁定**: 在 \`package.json\` 中添加 \`overrides\` 字段强制锁定依赖树版本。\n`;
+    md += `3. **依赖重装**: 删除 \`node_modules\` 和 \`package-lock.json\` 后重新运行 \`npm install\`。\n\n`;
+
+    md += `### 第三阶段：凭证轮换 (Credential Rotation)\n`;
+    md += `- **风险声明**: 投毒版本具备窃取环境变量和 NPM Token 的能力。\n`;
+    md += `- **行动建议**: 立即更换所有服务器凭据、NPM 发布 Token、数据库密码等敏感信息。\n\n`;
+
+    md += `---\n`;
+    md += `*报告生成工具: axios-emergency-scanner v${results.version || '1.4.0'}*\n`;
+    
+    return md;
+}
+
 // ========== CLI 入口 (CLI Entry) ==========
 program
     .name('axios-scan')
     .description('axios & OpenClaw 供应链投毒事件应急审计工具')
-    .version('1.3.4')
+    .version('1.4.0')
     .argument('[path]', '待扫描的路径', '.')
     .option('--fix', '自动修复发现的 axios 投毒版本')
-    .option('--json [file]', '生成详细审计报告')
+    .option('--json [file]', '生成 JSON 审计报告')
+    .option('--md [file]', '生成精美的 Markdown 审计报告')
     .action(async (targetPath, options) => {
         // 动态获取当前路径，避免定义时的静态路径
         const scanRoot = targetPath === '.' ? process.cwd() : path.resolve(targetPath);
         
-        printHeader('axios & OpenClaw 供应链投毒应急审计工具 v1.3.3');
+        printHeader('axios & OpenClaw 供应链投毒应急审计工具 v1.4.0');
         console.log(`执行时间: ${new Date().toLocaleString()}\n运行环境: ${process.platform} (${os.hostname()})`);
         
         const results = {
+            version: '1.4.0',
             timestamp: new Date().toISOString(),
             platform: process.platform,
             hostname: os.hostname(),
             targetPath: scanRoot,
             globalAudit: scanGlobalPackages(),
             systemAudit: checkRAT(),
+            networkAudit: checkNetworkIOCs(),
             openClawAudit: auditOpenClaw(),
             projectAudit: scanProjects(scanRoot),
             cacheAudit: checkNpmCache()
         };
 
         const isSystemSafe = results.globalAudit.safe && results.systemAudit.safe && 
+                             results.networkAudit.safe &&
                              results.openClawAudit.safe && results.projectAudit.safe && 
                              results.cacheAudit.safe;
 
@@ -364,7 +484,14 @@ program
         if (options.json) {
             const jsonPath = typeof options.json === 'string' ? options.json : 'axios-security-report.json';
             fs.writeFileSync(jsonPath, JSON.stringify(results, null, 2));
-            console.log(chalk.cyan(`\n📋 详细报告已保存至: ${jsonPath}`));
+            console.log(chalk.cyan(`\n📋 详细 JSON 报告已保存至: ${jsonPath}`));
+        }
+
+        if (options.md) {
+            const mdPath = typeof options.md === 'string' ? options.md : 'axios-security-report.md';
+            const mdContent = generateMarkdownReport(results);
+            fs.writeFileSync(mdPath, mdContent);
+            console.log(chalk.cyan(`\n📑 精美 Markdown 审计报告已保存至: ${mdPath}`));
         }
     });
 

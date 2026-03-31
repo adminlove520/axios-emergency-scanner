@@ -47,11 +47,17 @@ npm run scan
 # 扫描指定目录并自动修复
 node bin/axios-scan.js /path/to/projects --fix
 
-# 导出 JSON 审计报告
-node bin/axios-scan.js . --json
+# 导出详细审计报告 (JSON & Markdown)
+axios-scan . --json
+axios-scan . --md
 ```
 
-### 使用 Bash (Linux/macOS)
+### 报告示例 (Markdown)
+
+生成的 Markdown 审计报告包含：
+- **审计结论**: 明确标注系统是否安全 (🟢/🔴)。
+- **资产盘点**: 汇总所有受扫描的项目、包和系统配置状态。
+- **修复方案**: 提供分阶段（紧急清理、项目修复、凭证保护）的详细处置建议。
 
 ```bash
 chmod +x scripts/axios-security-scan.sh
