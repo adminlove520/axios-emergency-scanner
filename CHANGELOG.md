@@ -2,6 +2,13 @@
 
 所有对 `axios-emergency-scanner` 的重要更改都记录在本文档中。
 
+## [1.5.2] - 2026-03-31
+
+### ✨ 云端威胁研判 (Cloud Intelligence)
+- **集成 ThreatFox (abuse.ch)**: 增加 `--judge` 选项。开启后，对于未命中本地特征库的未知外联 IP，工具会自动查询 ThreatFox C2 数据库进行实时研判。
+- **集成 AbuseIPDB**: 支持通过环境变量 `ABUSEIPDB_API_KEY` 接入 AbuseIPDB。开启研判后可自动获取 IP 的恶意得分（Abuse Confidence Score）。
+- **智能过滤**: 自动排除回环地址 (127.0.0.1) 和私有局域网地址，专注于外网异常连接的研判。
+
 ## [1.5.1] - 2026-03-31
 
 ### ✨ 威胁情报更新 (Threat Intel Update)

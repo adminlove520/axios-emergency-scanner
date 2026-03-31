@@ -8,6 +8,7 @@
 
 ## ✨ 核心功能
 
+- **云端威胁研判 (v1.5.2+)**: 通过 `--judge` 选项集成 **ThreatFox (abuse.ch)** 和 **AbuseIPDB**。对于未知的异常外联，工具会自动向威胁情报中心发起实时研判。
 - **集成 StepSecurity 深度威胁情报 (v1.5.1+)**: 包含已确认的 C2 域名 `sfrclak.com`、恶意 IP `142.11.206.73` 以及恶意活动 ID `6202033`。
 - **反取证清理检测 (v1.5.1+)**: 即使恶意脚本尝试在执行后通过覆盖 `package.json` 来抹除痕迹，工具依然能通过检测目录结构和残留的 `package.md` 确认感染。
 - **OpenClaw 专项审计**: 检测 `openclaw`, `open-claw`, `@openclaw/core` 等数百个已知的恶意衍生包。
