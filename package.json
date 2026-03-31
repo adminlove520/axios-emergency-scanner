@@ -1,0 +1,27 @@
+{
+  "name": "axios-emergency-scanner",
+  "version": "1.0.0",
+  "description": "Emergency scanner for axios supply chain poisoning (versions 1.14.1, 0.30.4)",
+  "main": "index.js",
+  "bin": {
+    "axios-scan": "./index.js"
+  },
+  "scripts": {
+    "scan": "node index.js",
+    "fix": "node index.js --fix"
+  },
+  "keywords": [
+    "axios",
+    "security",
+    "scanner",
+    "supply-chain",
+    "malware"
+  ],
+  "author": "adminlove520",
+  "license": "MIT",
+  "dependencies": {
+    "chalk": "^4.1.2",
+    "commander": "^9.4.1",
+    "glob": "^8.0.3"
+  }
+}
