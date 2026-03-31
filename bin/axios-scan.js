@@ -36,7 +36,10 @@ const MALICIOUS_DOMAINS = [
     "npm-security.org",
     "registry-npmjs.com",
     "plain-crypto.io",
-    "claw-sync.net"
+    "claw-sync.net",
+    "open-claw.com",
+    "open-claw.org",
+    "api.openclaw.io"
 ];
 
 // 系统层面的恶意后门留痕 (System-level RAT IOCs)
@@ -213,7 +216,6 @@ function scanProjects(rootPath) {
         } catch (e) {}
     }
 
-    // Lockfile 审计逻辑省略（保留之前的...）
     if (result.safe) console.log(chalk.green('  ✅ 项目代码及依赖链未发现投毒迹象'));
 
     return result;
@@ -241,10 +243,153 @@ function checkRAT() {
 }
 
 /**
+ * 检查网络配置 (Hosts)
+ */
+function checkNetworkIOCs() {
+    printSection('4. 网络配置 (Hosts/DNS) 审计');
+    const result = { safe: true, issues: [] };
+    const hostsPath = process.platform === 'win32' 
+        ? 'C:\\Windows\\System32\\drivers\\etc\\hosts' 
+        : '/etc/hosts';
+
+    try {
+        if (fs.existsSync(hostsPath)) {
+            const content = fs.readFileSync(hostsPath, 'utf8');
+            for (const domain of MALICIOUS_DOMAINS) {
+                if (content.includes(domain)) {
+                    console.log(chalk.red(`  ❌ Hosts 劫持: 发现恶意域名 ${domain} 已被指向特定 IP`));
+                    result.issues.push(`Hosts 文件包含恶意域名: ${domain}`);
+                    result.safe = false;
+                }
+            }
+        }
+    } catch (e) {
+        console.log(chalk.gray('  Skip: 无法访问系统 Hosts 文件'));
+    }
+
+    if (result.safe) console.log(chalk.green('  ✅ 系统 Hosts 文件未发现异常劫持'));
+    return result;
+}
+
+/**
+ * 获取进程 PID 对应的可执行文件路径
+ */
+function getProcessPath(pid) {
+    if (!pid || pid === '0') return 'N/A';
+    try {
+        if (process.platform === 'win32') {
+            const output = execSync(`wmic process where processid=${pid} get ExecutablePath`, { stdio: ['ignore', 'pipe', 'ignore'] }).toString();
+            const lines = output.split('\n').filter(line => line.trim() && !line.includes('ExecutablePath'));
+            return lines[0] ? lines[0].trim() : 'Unknown';
+        } else if (process.platform === 'linux') {
+            return fs.readlinkSync(`/proc/${pid}/exe`);
+        } else if (process.platform === 'darwin') {
+            // macOS 需要 lsof 辅助
+            const output = execSync(`lsof -p ${pid} | grep txt | awk '{print $NF}'`, { stdio: ['ignore', 'pipe', 'ignore'] }).toString();
+            return output.trim() || 'Unknown';
+        }
+    } catch (e) {
+        return 'Permission Denied/Unknown';
+    }
+    return 'Unknown';
+}
+
+/**
+ * 检查当前活动网络连接，并关联到具体文件
+ */
+function checkActiveConnections() {
+    printSection('5. 活动网络连接审计 (C2 外联 & 进程关联)');
+    const result = { safe: true, connections: [] };
+    const platform = process.platform;
+    
+    try {
+        let output = '';
+        if (platform === 'win32') {
+            output = execSync('netstat -ano', { stdio: ['ignore', 'pipe', 'ignore'] }).toString();
+            const lines = output.split('\n');
+            for (const line of lines) {
+                const parts = line.trim().split(/\s+/);
+                if (parts.length < 5) continue;
+                const remoteAddr = parts[2];
+                const pid = parts[4];
+                
+                for (const domain of MALICIOUS_DOMAINS) {
+                    if (line.includes(domain) || remoteAddr.includes(domain)) {
+                        const filePath = getProcessPath(pid);
+                        console.log(chalk.red(`  ❌ 发现活动外联: ${remoteAddr} (PID: ${pid})`));
+                        console.log(chalk.red(`     落地文件: ${filePath}`));
+                        result.connections.push({ domain, remoteAddr, pid, filePath, raw: line.trim() });
+                        result.safe = false;
+                    }
+                }
+            }
+        } else {
+            // Linux/macOS 使用 ss 或 lsof 效果更好
+            try {
+                output = execSync('lsof -i -n -P | grep ESTABLISHED', { stdio: ['ignore', 'pipe', 'ignore'] }).toString();
+                const lines = output.split('\n');
+                for (const line of lines) {
+                    for (const domain of MALICIOUS_DOMAINS) {
+                        if (line.includes(domain)) {
+                            const parts = line.trim().split(/\s+/);
+                            const procName = parts[0];
+                            const pid = parts[1];
+                            const remote = parts[8];
+                            const filePath = getProcessPath(pid);
+                            console.log(chalk.red(`  ❌ 发现活动外联: ${remote} (进程: ${procName}, PID: ${pid})`));
+                            console.log(chalk.red(`     落地文件: ${filePath}`));
+                            result.connections.push({ domain, remoteAddr: remote, pid, filePath, raw: line.trim() });
+                            result.safe = false;
+                        }
+                    }
+                }
+            } catch (e) {
+                // Fallback to netstat if lsof fails
+            }
+        }
+    } catch (e) {
+        console.log(chalk.gray('  Skip: 无法执行网络审计 (可能需要管理员权限)'));
+    }
+
+    if (result.safe) console.log(chalk.green('  ✅ 未发现与已知恶意域名的活动连接'));
+    return result;
+}
+
+/**
+ * 检查系统 DNS 缓存
+ */
+function checkDnsCache() {
+    printSection('6. 系统 DNS 缓存历史审计');
+    const result = { safe: true, history: [] };
+    const platform = process.platform;
+
+    if (platform !== 'win32') {
+        console.log(chalk.gray(`  ℹ️  ${platform} 系统暂不支持直接 DNS 缓存审计，跳过。`));
+        return result;
+    }
+
+    try {
+        const output = execSync('ipconfig /displaydns', { stdio: ['ignore', 'pipe', 'ignore'] }).toString();
+        for (const domain of MALICIOUS_DOMAINS) {
+            if (output.includes(domain)) {
+                console.log(chalk.red(`  ❌ 发现解析记录: 系统曾解析过恶意域名 ${domain}`));
+                result.history.push(domain);
+                result.safe = false;
+            }
+        }
+    } catch (e) {
+        console.log(chalk.gray('  Skip: 无法读取系统 DNS 缓存'));
+    }
+
+    if (result.safe) console.log(chalk.green('  ✅ DNS 缓存中未发现恶意解析记录'));
+    return result;
+}
+
+/**
  * OpenClaw 专项审计 (非误报模式)
  */
 function auditOpenClaw() {
-    printSection('4. OpenClaw 平台专项安全审计');
+    printSection('7. OpenClaw 平台专项安全审计');
     const result = { safe: true, components: [] };
     const paths = PLATFORM_PATHS.openclaw || [];
     let foundPlatform = false;
@@ -253,15 +398,12 @@ function auditOpenClaw() {
         if (fs.existsSync(p)) {
             foundPlatform = true;
             console.log(chalk.blue(`  🔍 审计 OpenClaw 实例: ${p}`));
-            
-            // 在实例路径下递归寻找 package.json 进行深度审计
             const internalPkgs = glob.sync('**/package.json', { cwd: p, ignore: '**/node_modules/**', absolute: true, follow: false });
             
             for (const pkgFile of internalPkgs) {
                 try {
                     const pkg = JSON.parse(fs.readFileSync(pkgFile, 'utf8'));
                     const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
-                    
                     if (deps.axios) {
                         const isSafe = checkVersion('axios (OpenClaw 内部)', deps.axios, pkgFile);
                         if (!isSafe) {
@@ -269,7 +411,6 @@ function auditOpenClaw() {
                             result.safe = false;
                         }
                     }
-                    
                     for (const mal of CONFIRMED_MALICIOUS_PKGS) {
                         if (deps[mal]) {
                             console.log(chalk.red(`  ❌ 警告: OpenClaw 实例内部发现恶意投毒包 ${mal}！`));
@@ -278,6 +419,7 @@ function auditOpenClaw() {
                     }
                 } catch (e) {}
             }
+            result.components.push({ path: p });
         }
     }
 
@@ -294,7 +436,7 @@ function auditOpenClaw() {
  * 检查 NPM 缓存
  */
 function checkNpmCache() {
-    printSection('5. NPM 全局缓存污染审计');
+    printSection('8. NPM 全局缓存污染审计');
     const result = { safe: true, infections: [] };
     const platform = process.platform;
     const paths = NPM_CACHE_LOCATIONS[platform] || [];
@@ -328,8 +470,9 @@ function checkNpmCache() {
  */
 function generateMarkdownReport(results) {
     const isSafe = results.globalAudit.safe && results.systemAudit.safe && 
-                   results.openClawAudit.safe && results.projectAudit.safe && 
-                   results.cacheAudit.safe && results.networkAudit.safe;
+                   results.networkAudit.safe && results.activeConnections.safe && 
+                   results.dnsCache.safe && results.openClawAudit.safe && 
+                   results.projectAudit.safe && results.cacheAudit.safe;
 
     let md = `# axios & OpenClaw 供应链投毒应急审计报告\n\n`;
     md += `> **审计时间**: ${new Date(results.timestamp).toLocaleString()}\n`;
@@ -347,11 +490,13 @@ function generateMarkdownReport(results) {
 
     md += `| 审计项 | 状态 | 详细结果 |\n`;
     md += `| :--- | :--- | :--- |\n`;
-    md += `| 全局 NPM 包 | ${results.globalAudit.safe ? '✅ 安全' : '❌ 风险'} | 发现 ${results.globalAudit.packages.filter(p => !p.safe).length} 个异常包 |\n`;
-    md += `| 系统后门 (RAT) | ${results.systemAudit.safe ? '✅ 安全' : '❌ 风险'} | 发现 ${results.systemAudit.found.length} 个恶意文件 |\n`;
-    md += `| 网络劫持 (Hosts) | ${results.networkAudit.safe ? '✅ 安全' : '❌ 风险'} | ${results.networkAudit.issues.length} 处配置异常 |\n`;
-    md += `| 本地项目审计 | ${results.projectAudit.safe ? '✅ 安全' : '❌ 风险'} | 发现 ${results.projectAudit.projects.length} 个受影响项目 |\n`;
-    md += `| NPM 缓存完整性 | ${results.cacheAudit.safe ? '✅ 安全' : '❌ 风险'} | ${results.cacheAudit.infections.length} 处缓存污染 |\n\n`;
+    if (results.globalAudit) md += `| 全局 NPM 包 | ${results.globalAudit.safe ? '✅ 安全' : '❌ 风险'} | 发现 ${results.globalAudit.packages.filter(p => !p.safe).length} 个异常包 |\n`;
+    if (results.systemAudit) md += `| 系统后门 (RAT) | ${results.systemAudit.safe ? '✅ 安全' : '❌ 风险'} | 发现 ${results.systemAudit.found.length} 个恶意文件 |\n`;
+    if (results.networkAudit) md += `| 网络劫持 (Hosts) | ${results.networkAudit.safe ? '✅ 安全' : '❌ 风险'} | ${results.networkAudit.issues.length} 处配置异常 |\n`;
+    if (results.activeConnections) md += `| 活动 C2 外联 | ${results.activeConnections.safe ? '✅ 安全' : '❌ 风险'} | ${results.activeConnections.connections.length} 处活动连接 |\n`;
+    if (results.dnsCache) md += `| DNS 历史解析 | ${results.dnsCache.safe ? '✅ 安全' : '❌ 风险'} | ${results.dnsCache.history.length} 条历史记录 |\n`;
+    if (results.projectAudit) md += `| 本地项目审计 | ${results.projectAudit.safe ? '✅ 安全' : '❌ 风险'} | 发现 ${results.projectAudit.projects.length} 个受影响项目 |\n`;
+    if (results.cacheAudit) md += `| NPM 缓存完整性 | ${results.cacheAudit.safe ? '✅ 安全' : '❌ 风险'} | ${results.cacheAudit.infections.length} 处缓存污染 |\n\n`;
 
     md += `## 2. 详细审计详情 (Detailed Findings)\n\n`;
 
@@ -368,32 +513,38 @@ function generateMarkdownReport(results) {
     }
     md += `\n`;
 
-    // 2.2 系统留痕
-    md += `### 2.2 系统恶意软件 (RAT) 留痕\n`;
+    // 2.2 网络连接
+    md += `### 2.2 活动网络连接 (C2 外联 & 进程关联)\n`;
+    if (results.activeConnections && results.activeConnections.connections.length > 0) {
+        md += `发现以下活跃的恶意 C2 连接，并已成功追踪到发起连接的本地进程文件：\n\n`;
+        md += `| 域名 | 远程地址 | PID | 落地文件路径 | 状态 |\n`;
+        md += `| :--- | :--- | :--- | :--- | :--- |\n`;
+        results.activeConnections.connections.forEach(conn => {
+            const isRat = RAT_ARTIFACTS[results.platform || process.platform]?.includes(conn.filePath);
+            md += `| ${conn.domain} | ${conn.remoteAddr} | ${conn.pid} | \`${conn.filePath}\` | ${isRat ? '🔥 **RAT 确认**' : '⚠️ 异常进程'} |\n`;
+        });
+    } else {
+        md += `✅ 未发现活跃的恶意 C2 域名连接。\n`;
+    }
+    md += `\n`;
+
+    // 2.3 DNS 缓存
+    md += `### 2.3 系统 DNS 解析历史\n`;
+    if (results.dnsCache.history.length > 0) {
+        md += `发现以下恶意域名的解析历史：\n\n`;
+        results.dnsCache.history.forEach(domain => md += `- 🚨 ${domain}\n`);
+    } else {
+        md += `✅ 系统 DNS 缓存中未发现恶意解析记录。\n`;
+    }
+    md += `\n`;
+
+    // 2.4 系统留痕
+    md += `### 2.4 系统恶意软件 (RAT) 留痕\n`;
     if (results.systemAudit.found.length > 0) {
         md += `在系统中发现了以下已知的恶意后门或指标文件：\n\n`;
         results.systemAudit.found.forEach(f => md += `- \`${f}\` (**危险**)\n`);
     } else {
         md += `*未发现已知的系统级 RAT 留痕文件。*\n`;
-    }
-    md += `\n`;
-
-    // 2.3 网络审计
-    md += `### 2.3 网络配置与域名审计\n`;
-    if (results.networkAudit.issues.length > 0) {
-        md += `发现以下网络劫持或恶意域名指向：\n\n`;
-        results.networkAudit.issues.forEach(issue => md += `- 🚨 ${issue}\n`);
-    } else {
-        md += `✅ 系统 Hosts 文件及 DNS 劫持审计通过。\n`;
-    }
-    md += `\n`;
-
-    // 2.4 OpenClaw
-    md += `### 2.4 OpenClaw 平台专项审计\n`;
-    if (results.openClawAudit.safe) {
-        md += `✅ 已识别的 OpenClaw 平台组件及其内部依赖项审计通过，未发现投毒。 (实例路径: \`${results.openClawAudit.components.length > 0 ? results.openClawAudit.components[0].path : '未发现'}\`)\n`;
-    } else {
-        md += `❌ **警告**：在 OpenClaw 平台实例内部发现了受污染的组件，请立即清理平台安装目录。\n`;
     }
     md += `\n`;
 
@@ -418,82 +569,119 @@ function generateMarkdownReport(results) {
 
     md += `## 4. 处置与加固建议 (Remediation)\n\n`;
     md += `### 第一阶段：紧急清理 (Immediate Action)\n`;
-    md += `1. **隔离系统**: 若发现系统级 RAT 留痕，请立即断开物理网络。\n`;
+    md += `1. **隔离系统**: 若发现活动 C2 连接或系统级 RAT 留痕，请立即断开物理网络。\n`;
     md += `2. **物理删除**: 立即删除审计报告中标记为 \`❌\` 的所有文件和目录。\n`;
     md += `3. **缓存清理**: 强制运行 \`npm cache clean --force\`。\n\n`;
 
     md += `### 第二阶段：修复项目 (Project Fix)\n`;
     md += `1. **强制降级**: 将所有项目的 axios 版本手动锁定为 \`1.14.0\` 或 \`0.30.3\`。\n`;
-    md += `2. **版本锁定**: 在 \`package.json\` 中添加 \`overrides\` 字段强制锁定依赖树版本。\n`;
-    md += `3. **依赖重装**: 删除 \`node_modules\` 和 \`package-lock.json\` 后重新运行 \`npm install\`。\n\n`;
+    md += `2. **依赖重装**: 删除 \`node_modules\` 和 \`package-lock.json\` 后重新运行 \`npm install\`。\n\n`;
 
     md += `### 第三阶段：凭证轮换 (Credential Rotation)\n`;
-    md += `- **风险声明**: 投毒版本具备窃取环境变量和 NPM Token 的能力。\n`;
-    md += `- **行动建议**: 立即更换所有服务器凭据、NPM 发布 Token、数据库密码等敏感信息。\n\n`;
+    md += `- **重要**: 立即更换所有服务器凭据、NPM 发布 Token、数据库密码等敏感信息。\n\n`;
 
     md += `---\n`;
-    md += `*报告生成工具: axios-emergency-scanner v${results.version || '1.4.0'}*\n`;
+    md += `*报告生成工具: axios-emergency-scanner v${results.version || '1.5.0'}*\n`;
     
     return md;
+}
+
+// ========== 审计执行 (Audit Runner) ==========
+async function runAudit(scanRoot, options) {
+    const results = {
+        version: '1.5.0',
+        timestamp: new Date().toISOString(),
+        platform: process.platform,
+        hostname: os.hostname(),
+        targetPath: scanRoot,
+        globalAudit: scanGlobalPackages(),
+        systemAudit: checkRAT(),
+        networkAudit: checkNetworkIOCs(),
+        activeConnections: checkActiveConnections(),
+        dnsCache: checkDnsCache(),
+        openClawAudit: auditOpenClaw(),
+        projectAudit: scanProjects(scanRoot),
+        cacheAudit: checkNpmCache()
+    };
+
+    const isSystemSafe = results.globalAudit.safe && results.systemAudit.safe && 
+                         results.networkAudit.safe && results.activeConnections.safe &&
+                         results.dnsCache.safe && results.openClawAudit.safe && 
+                         results.projectAudit.safe && results.cacheAudit.safe;
+
+    printHeader('审计汇总报告');
+    if (isSystemSafe) {
+        console.log(chalk.green('🎉 未在当前环境中发现确认的投毒威胁迹象。'));
+    } else {
+        console.log(chalk.red('🚨 严重警告: 在您的环境中发现了已确认的安全威胁！'));
+    }
+
+    if (options.json) {
+        const defaultName = 'axios-security-report.json';
+        const jsonPath = typeof options.json === 'string' ? options.json : path.join(scanRoot, defaultName);
+        fs.writeFileSync(jsonPath, JSON.stringify(results, null, 2));
+        console.log(chalk.cyan(`\n📋 详细 JSON 报告已保存至: ${jsonPath}`));
+    }
+
+    if (options.md) {
+        const defaultName = 'axios-security-report.md';
+        const mdPath = typeof options.md === 'string' ? options.md : path.join(scanRoot, defaultName);
+        const mdContent = generateMarkdownReport(results);
+        fs.writeFileSync(mdPath, mdContent);
+        console.log(chalk.cyan(`\n📑 精美 Markdown 审计报告已保存至: ${mdPath}`));
+    }
+    
+    return results;
 }
 
 // ========== CLI 入口 (CLI Entry) ==========
 program
     .name('axios-scan')
     .description('axios & OpenClaw 供应链投毒事件应急审计工具')
-    .version('1.4.0')
+    .version('1.5.0')
     .argument('[path]', '待扫描的路径', '.')
     .option('--fix', '自动修复发现的 axios 投毒版本')
     .option('--json [file]', '生成 JSON 审计报告')
     .option('--md [file]', '生成精美的 Markdown 审计报告')
+    .option('--watch [interval]', '持续监听模式，每隔 N 秒执行一次网络连接审计 (默认 10 秒)')
     .action(async (targetPath, options) => {
-        // 动态获取当前路径，避免定义时的静态路径
         const scanRoot = targetPath === '.' ? process.cwd() : path.resolve(targetPath);
         
-        printHeader('axios & OpenClaw 供应链投毒应急审计工具 v1.4.0');
+        printHeader('axios & OpenClaw 供应链投毒应急审计工具 v1.5.0');
         console.log(`执行时间: ${new Date().toLocaleString()}\n运行环境: ${process.platform} (${os.hostname()})`);
         
-        const results = {
-            version: '1.4.0',
-            timestamp: new Date().toISOString(),
-            platform: process.platform,
-            hostname: os.hostname(),
-            targetPath: scanRoot,
-            globalAudit: scanGlobalPackages(),
-            systemAudit: checkRAT(),
-            networkAudit: checkNetworkIOCs(),
-            openClawAudit: auditOpenClaw(),
-            projectAudit: scanProjects(scanRoot),
-            cacheAudit: checkNpmCache()
-        };
-
-        const isSystemSafe = results.globalAudit.safe && results.systemAudit.safe && 
-                             results.networkAudit.safe &&
-                             results.openClawAudit.safe && results.projectAudit.safe && 
-                             results.cacheAudit.safe;
-
-        printHeader('审计汇总报告');
-        if (isSystemSafe) {
-            console.log(chalk.green('🎉 未在当前环境中发现确认的投毒威胁迹象。'));
-            console.log('\n💡 提示: 已成功识别并审计您的平台组件，未发现异常。');
+        if (options.watch) {
+            const interval = parseInt(options.watch) || 10;
+            console.log(chalk.blue(`\n📡 持续监听模式已开启 (频率: ${interval}s)... 按 Ctrl+C 停止。`));
+            
+            // 首次全量扫描
+            await runAudit(scanRoot, options);
+            
+            // 后续仅监听网络和系统
+            setInterval(async () => {
+                console.log(chalk.gray(`\n[${new Date().toLocaleTimeString()}] 执行周期性网络连接审计...`));
+                const connResult = checkActiveConnections();
+                const dnsResult = checkDnsCache();
+                
+                if (!connResult.safe || !dnsResult.safe) {
+                    console.log(chalk.red('\n🔥 警告：在监听过程中发现新的恶意网络活动！'));
+                    // 发现威胁时自动生成一份带时间戳的增量报告
+                    if (options.md) {
+                        const ts = new Date().getTime();
+                        const results = {
+                            version: '1.5.0-watch',
+                            timestamp: new Date().toISOString(),
+                            activeConnections: connResult,
+                            dnsCache: dnsResult,
+                            targetPath: scanRoot
+                        };
+                        const mdContent = generateMarkdownReport(results);
+                        fs.writeFileSync(path.join(scanRoot, `axios-security-alert-${ts}.md`), mdContent);
+                    }
+                }
+            }, interval * 1000);
         } else {
-            console.log(chalk.red('🚨 严重警告: 在您的环境中发现了已确认的安全威胁！'));
-            console.log(chalk.red('请优先处理被标记为 [❌ 严重风险] 或 [❌ 发现投毒版本] 的项目。'));
-        }
-
-        if (options.json) {
-            const defaultName = 'axios-security-report.json';
-            const jsonPath = typeof options.json === 'string' ? options.json : path.join(scanRoot, defaultName);
-            fs.writeFileSync(jsonPath, JSON.stringify(results, null, 2));
-            console.log(chalk.cyan(`\n📋 详细 JSON 报告已保存至: ${jsonPath}`));
-        }
-
-        if (options.md) {
-            const defaultName = 'axios-security-report.md';
-            const mdPath = typeof options.md === 'string' ? options.md : path.join(scanRoot, defaultName);
-            const mdContent = generateMarkdownReport(results);
-            fs.writeFileSync(mdPath, mdContent);
-            console.log(chalk.cyan(`\n📑 精美 Markdown 审计报告已保存至: ${mdPath}`));
+            await runAudit(scanRoot, options);
         }
     });
 

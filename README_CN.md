@@ -9,6 +9,10 @@
 ## ✨ 核心功能
 
 - **OpenClaw 专项审计**: 检测 `openclaw`, `open-claw`, `@openclaw/core` 等数百个已知的恶意衍生包。
+- **活动网络 C2 外联审计 (v1.5.0+)**: 实时检测系统是否正在与恶意域名 (如 `axios-updates.com`) 进行网络通信。
+- **进程-文件全路径关联 (v1.5.0+)**: 自动提取发起恶意连接的 PID，并将其映射到磁盘上的绝对路径可执行文件，精准溯源。
+- **持续监听模式 (Watch Mode)**: 使用 `--watch [interval]` 开启后台静默监听，实时捕获异常心跳。
+- **系统 DNS 缓存审计 (v1.5.0+)**: 深度分析系统解析历史，检测近期内恶意域名的解析记录 (仅限 Windows)。
 - **多平台深度审计**: 支持 Windows (PowerShell), Linux/macOS (Bash) 以及全功能的 Node.js CLI。
 - **项目级扫描**: 递归查找工作目录下的所有 `package.json` 和 Lockfiles 分析直接及间接依赖。
 - **后门留痕 (RAT/OpenClaw) 检测**: 扫描已知的恶意文件路径，包括 `~/.openclaw` 等。
@@ -33,6 +37,9 @@ axios-scan
 
 # 运行扫描并自动修复
 axios-scan . --fix
+
+# 开启持续监听模式 (每 5 秒扫描一次网络连接，并生成 Markdown 报告)
+axios-scan --watch 5 --md
 ```
 
 ### 源码运行 (适合开发者)

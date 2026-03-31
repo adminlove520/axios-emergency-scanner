@@ -9,6 +9,10 @@ On March 31, 2026, a maintainer account of the popular `axios` library was compr
 ## Features
 
 - **Multi-platform support**: Includes scripts for Windows (PowerShell), Linux/macOS (Bash), and a unified Node.js CLI.
+- **Network C2 Live Audit (v1.5.0+)**: Real-time detection of active C2 outbound connections (e.g., `axios-updates.com`).
+- **Process-File Correlation (v1.5.0+)**: Automatically maps active malicious connections to their originating local processes and filesystem paths.
+- **Continuous Watch Mode**: Use `--watch [interval]` to monitor network activity in the background.
+- **System DNS Cache Audit (v1.5.0+)**: Deeply analyzes system resolution history for malicious domain records (Windows only).
 - **Global Package Scan**: Checks globally installed npm packages for compromised axios versions.
 - **Project-level Scan**: Recursively finds all `package.json` files in your workspace and audits dependencies.
 - **RAT Detection**: Scans for known malicious artifacts:
@@ -34,6 +38,9 @@ axios-scan
 
 # Run scan with automatic fix
 axios-scan . --fix
+
+# Enable continuous watch mode (e.g., scan network activity every 5s)
+axios-scan --watch 5 --md
 ```
 
 ### Run from Source (For Developers)
