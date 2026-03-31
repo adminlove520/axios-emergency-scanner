@@ -325,24 +325,26 @@ function checkNpmCache() {
 program
     .name('axios-scan')
     .description('axios & OpenClaw 供应链投毒事件应急审计工具')
-    .version('1.3.2')
-    .argument('[path]', '待扫描的路径', process.cwd())
+    .version('1.3.4')
+    .argument('[path]', '待扫描的路径', '.')
     .option('--fix', '自动修复发现的 axios 投毒版本')
     .option('--json [file]', '生成详细审计报告')
     .action(async (targetPath, options) => {
-        const fullPath = path.resolve(targetPath);
-        printHeader('axios & OpenClaw 供应链投毒应急审计工具 v1.3.2');
+        // 动态获取当前路径，避免定义时的静态路径
+        const scanRoot = targetPath === '.' ? process.cwd() : path.resolve(targetPath);
+        
+        printHeader('axios & OpenClaw 供应链投毒应急审计工具 v1.3.3');
         console.log(`执行时间: ${new Date().toLocaleString()}\n运行环境: ${process.platform} (${os.hostname()})`);
         
         const results = {
             timestamp: new Date().toISOString(),
             platform: process.platform,
             hostname: os.hostname(),
-            targetPath: fullPath,
+            targetPath: scanRoot,
             globalAudit: scanGlobalPackages(),
             systemAudit: checkRAT(),
             openClawAudit: auditOpenClaw(),
-            projectAudit: scanProjects(fullPath),
+            projectAudit: scanProjects(scanRoot),
             cacheAudit: checkNpmCache()
         };
 
