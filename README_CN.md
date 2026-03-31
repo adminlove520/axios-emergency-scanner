@@ -20,7 +20,22 @@
 
 ## 🚀 使用指南
 
-### 使用 Node.js (推荐，功能最全)
+### 快速安装 (推荐)
+
+如果你已安装 Node.js，可以直接通过 npm 全局安装此工具，以便在任何地方使用：
+
+```bash
+# 全局安装
+npm install -g axios-emergency-scanner
+
+# 运行扫描 (当前目录)
+axios-scan
+
+# 运行扫描并自动修复
+axios-scan . --fix
+```
+
+### 源码运行 (适合开发者)
 
 ```bash
 # 安装依赖

@@ -21,7 +21,22 @@ On March 31, 2026, a maintainer account of the popular `axios` library was compr
 
 ## Usage
 
-### Using Node.js (Recommended)
+### Quick Installation (Recommended)
+
+If you have Node.js installed, you can install the tool globally via npm for easy access:
+
+```bash
+# Install globally
+npm install -g axios-emergency-scanner
+
+# Run scan (current directory)
+axios-scan
+
+# Run scan with automatic fix
+axios-scan . --fix
+```
+
+### Run from Source (For Developers)
 
 ```bash
 # Install dependencies
