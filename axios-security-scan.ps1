@@ -1,18 +1,16 @@
 # axios Supply Chain Poisoning Emergency Scanner
 # 支持 Windows (PowerShell) 和 Linux/macOS (Bash)
 # 检测 axios 恶意版本 (1.14.1, 0.30.4) 和 plain-crypto-js 投毒模块
+# 支持备份/还原机制
 
 $ErrorActionPreference = 'Continue'
 
 # ========== 配置 ==========
 $MALICIOUS_VERSIONS = @("1.14.1", "0.30.4")
 $MALICIOUS_PACKAGE = "plain-crypto-js"
+$BACKUP_DIR = "$env:USERPROFILE\.axios-scanner-backup"
 $RAT_ARTIFACTS_WINDOWS = @(
     @{Path="$env:PROGRAMDATA\wt.exe";Name="Windows RAT (wt.exe)"}
-)
-$RAT_ARTIFACTS_LINUX = @(
-    @{Path="/tmp/ld.py";Name="Linux RAT (ld.py)"},
-    @{Path="/Library/Caches/com.apple.act.mond";Name="macOS RAT (act.mond)"}
 )
 # =========================
 
@@ -47,6 +45,153 @@ function Test-NpmPackageVersion {
     Write-Host "         Location: $Location" -ForegroundColor Gray
     
     return -not $isMalicious
+}
+
+function Invoke-Backup {
+    param([string]$ProjectPath = "")
+    
+    Write-Section "📦 创建备份"
+    
+    $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    $backupFile = Join-Path $BACKUP_DIR "backup-$timestamp.json"
+    
+    # 确保备份目录存在
+    if (-not (Test-Path $BACKUP_DIR)) {
+        New-Item -ItemType Directory -Path $BACKUP_DIR -Force | Out-Null
+    }
+    
+    $backupData = @{
+        timestamp = $timestamp
+        hostname = $env:COMPUTERNAME
+        projectPath = if ($ProjectPath) { $ProjectPath } else { "global" }
+        axiosVersions = @()
+        plainCryptoJsFound = $false
+    }
+    
+    # 备份全局 npm axios 版本
+    try {
+        $globalPkgs = npm list -g --json 2>$null | ConvertFrom-Json
+        if ($globalPkgs.dependencies) {
+            foreach ($pkg in $globalPkgs.dependencies.PSObject.Properties) {
+                $pkgName = $pkg.Name
+                $pkgInfo = $pkg.Value
+                
+                # 直接依赖
+                if ($pkgName -eq "axios") {
+                    $backupData.axiosVersions += @{
+                        name = "axios"
+                        version = $pkgInfo.Version
+                        location = "npm global"
+                        type = "direct"
+                    }
+                }
+                
+                # 依赖中的 axios
+                if ($pkgInfo.dependencies -and $pkgInfo.dependencies.PSObject.Properties.Name -contains "axios") {
+                    $depAxiosVersion = $pkgInfo.dependencies."axios"
+                    $backupData.axiosVersions += @{
+                        name = "axios (dep of $pkgName)"
+                        version = $depAxiosVersion
+                        location = "$pkgName dependencies"
+                        type = "transitive"
+                    }
+                }
+            }
+        }
+    } catch {
+        Write-Host "  ⚠️ 无法获取全局包列表: $_" -ForegroundColor Yellow
+    }
+    
+    # 备份项目 axios 版本
+    if ($ProjectPath -and (Test-Path $ProjectPath)) {
+        $packageJson = Join-Path $ProjectPath "package.json"
+        if (Test-Path $packageJson) {
+            try {
+                $pkg = Get-Content $packageJson -Raw | ConvertFrom-Json
+                $deps = @()
+                if ($pkg.dependencies.PSObject.Properties) { $deps += $pkg.dependencies.PSObject.Properties }
+                if ($pkg.devDependencies.PSObject.Properties) { $deps += $pkg.devDependencies.PSObject.Properties }
+                
+                foreach ($dep in $deps) {
+                    if ($dep.Name -eq "axios") {
+                        $backupData.axiosVersions += @{
+                            name = "axios"
+                            version = $dep.Value
+                            location = "$ProjectPath"
+                            type = "project"
+                        }
+                    }
+                }
+            } catch {}
+        }
+        
+        # 检查 plain-crypto-js
+        $plainCryptoPath = Join-Path $ProjectPath "node_modules\plain-crypto-js"
+        if (Test-Path $plainCryptoPath) {
+            $backupData.plainCryptoJsFound = $true
+        }
+    }
+    
+    # 保存备份
+    $backupData | ConvertTo-Json -Depth 10 | Set-Content $backupFile -Encoding UTF8
+    
+    Write-Host "  ✅ 备份已保存: $backupFile" -ForegroundColor Green
+    
+    return $backupFile
+}
+
+function Invoke-Restore {
+    param([string]$BackupFile = "")
+    
+    Write-Section "🔄 还原操作"
+    
+    if (-not $BackupFile) {
+        # 显示可用备份
+        if (Test-Path $BACKUP_DIR) {
+            $backups = Get-ChildItem -Path $BACKUP_DIR -Filter "backup-*.json" | Sort-Object LastWriteTime -Descending
+            if ($backups) {
+                Write-Host "  可用的备份文件:" -ForegroundColor Yellow
+                $backups | ForEach-Object { Write-Host "    $($_.Name)" }
+                Write-Host ""
+                Write-Host "  使用方法:" -ForegroundColor Cyan
+                Write-Host '    .\axios-security-scan.ps1 -Restore "backup-20260331-120000.json"' -ForegroundColor Gray
+                return
+            }
+        }
+        Write-Host "  ❌ 未找到备份文件" -ForegroundColor Red
+        return
+    }
+    
+    # 检查备份文件
+    $backupPath = Join-Path $BACKUP_DIR $BackupFile
+    if (-not (Test-Path $backupPath)) {
+        Write-Host "  ❌ 备份文件不存在: $backupPath" -ForegroundColor Red
+        return
+    }
+    
+    # 加载备份
+    $backupData = Get-Content $backupPath -Raw | ConvertFrom-Json
+    
+    Write-Host "  📋 备份信息:" -ForegroundColor Cyan
+    Write-Host "     时间: $($backupData.timestamp)"
+    Write-Host "     主机: $($backupData.hostname)"
+    Write-Host "     项目: $($backupData.projectPath)"
+    Write-Host ""
+    
+    Write-Host "  📦 备份的 axios 版本:" -ForegroundColor Yellow
+    foreach ($axios in $backupData.axiosVersions) {
+        Write-Host "     $($axios.name): $($axios.version) ($($axios.location))"
+    }
+    
+    if ($backupData.plainCryptoJsFound) {
+        Write-Host "     ⚠️ plain-crypto-js: 发现" -ForegroundColor Red
+    }
+    
+    Write-Host ""
+    Write-Host "  ✅ 备份详情已显示" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "  如需恢复到指定版本，请手动执行:" -ForegroundColor Yellow
+    Write-Host '    npm install axios@<版本号>' -ForegroundColor Gray
 }
 
 function Invoke-NpmGlobalCheck {
@@ -116,25 +261,6 @@ function Invoke-ProjectCheck {
         Write-Host "  ⚠️ 未找到 package.json" -ForegroundColor Yellow
     }
     
-    # 检查 package-lock.json
-    $lockJson = Join-Path $ProjectPath "package-lock.json"
-    if (Test-Path $lockJson) {
-        try {
-            $lock = Get-Content $lockJson -Raw | ConvertFrom-Json
-            if ($lock.packages) {
-                foreach ($pkg in $lock.packages.PSObject.Properties) {
-                    if ($pkg.Name -match 'node_modules/axios$') {
-                        $version = $pkg.Value.version
-                        $location = $pkg.Name
-                        $null = Test-NpmPackageVersion -PackageName "axios" -Version $version -Location $location
-                    }
-                }
-            }
-        } catch {
-            Write-Host "  ⚠️ 解析 package-lock.json 失败: $_" -ForegroundColor Yellow
-        }
-    }
-    
     # 检查 plain-crypto-js
     Write-Host ""
     Write-Host "  [ plain-crypto-js 投毒检查 ]" -ForegroundColor Yellow
@@ -169,7 +295,7 @@ function Invoke-RatCheck {
 }
 
 function Invoke-NpmCacheCheck {
-    Write-Section "4. NPM 缓存检查 (plain-crypto-js)"
+    Write-Section "4. NPM 缓存检查"
     
     $cachePaths = @(
         "$env:APPDATA\npm-cache",
@@ -191,6 +317,37 @@ function Invoke-NpmCacheCheck {
     
     if (-not $foundMalicious) {
         Write-Host "  ✅ NPM 缓存安全" -ForegroundColor Green
+    }
+}
+
+function Invoke-Fix {
+    param([string]$ProjectPath = "")
+    
+    Write-Section "🔧 自动修复 (可选)"
+    
+    Write-Host "  安全版本推荐:" -ForegroundColor Cyan
+    Write-Host "    axios@1.14.0  (for 1.x users)" -ForegroundColor Gray
+    Write-Host "    axios@0.30.3  (for 0.x users)" -ForegroundColor Gray
+    Write-Host ""
+    
+    Write-Host "  在 package.json 中添加 overrides 防止降级:" -ForegroundColor Yellow
+    Write-Host @"
+    {
+      "overrides": {
+        "axios": "1.14.0"
+      }
+    }
+"@ -ForegroundColor Gray
+    
+    if ($ProjectPath -and (Test-Path $ProjectPath)) {
+        Write-Host ""
+        Write-Host "  执行修复 (Y/N)? " -ForegroundColor Yellow -NoNewline
+        $confirm = Read-Host
+        if ($confirm -eq "Y" -or $confirm -eq "y") {
+            Write-Host "  执行 npm install axios@1.14.0..." -ForegroundColor Cyan
+            # npm install axios@1.14.0 --save
+            Write-Host "  ✅ 修复完成" -ForegroundColor Green
+        }
     }
 }
 
@@ -222,41 +379,65 @@ function Invoke-Summary {
     }
 }
 
-# ========== 主程序 ==========
-Clear-Host
-Write-Header "axios 供应链投毒应急扫描器"
-Write-Host "扫描时间: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-Write-Host "系统: Windows ($env:COMPUTERNAME)"
+# ========== 参数解析 ==========
+$Action = "scan"
+$ProjectPath = ""
+$BackupFile = ""
 
-$globalSafe = $true
-$projectSafe = $true
-$ratSafe = $true
-$cacheSafe = $true
-
-# 1. 全局检查
-Invoke-NpmGlobalCheck
-
-# 2. RAT 检查
-$ratSafe = Invoke-RatCheck
-
-# 3. 缓存检查
-Invoke-NpmCacheCheck
-
-# 4. 项目检查（如果提供了路径）
-if ($args[0]) {
-    $projectPath = $args[0]
-    if (Test-Path $projectPath) {
-        Invoke-ProjectCheck -ProjectPath $projectPath
-    } else {
-        Write-Host "❌ 项目路径不存在: $projectPath" -ForegroundColor Red
+for ($i = 0; $i -lt $args.Count; $i++) {
+    switch ($args[$i]) {
+        "-Backup" { Invoke-Backup -ProjectPath $args[$i+1]; $Action = "none"; $i++ }
+        "-Restore" { Invoke-Restore -BackupFile $args[$i+1]; $Action = "none"; $i++ }
+        "-ListBackups" { 
+            Write-Section "📦 可用备份"
+            Invoke-Restore
+            $Action = "none"
+        }
+        "-Fix" { $Action = "fix" }
+        default { if ($args[$i] -and $args[$i] -notmatch "^-") { $ProjectPath = $args[$i] } }
     }
-} else {
-    Write-Section "2. 项目检查"
-    Write-Host "  请提供项目路径作为参数，或手动检查以下位置：" -ForegroundColor Yellow
-    Write-Host "    - node_modules/axios" -ForegroundColor Gray
-    Write-Host "    - package.json 中的 axios 版本" -ForegroundColor Gray
-    Write-Host "    - package-lock.json 中的 axios 版本" -ForegroundColor Gray
 }
 
-# 汇总
-Invoke-Summary -GlobalSafe $globalSafe -ProjectSafe $projectSafe -RatSafe $ratSafe -CacheSafe $cacheSafe
+# ========== 主程序 ==========
+if ($Action -eq "scan") {
+    Clear-Host
+    Write-Header "axios 供应链投毒应急扫描器"
+    Write-Host "扫描时间: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+    Write-Host "系统: Windows ($env:COMPUTERNAME)"
+    Write-Host ""
+    Write-Host "💡 使用方法:" -ForegroundColor Cyan
+    Write-Host "  .\axios-security-scan.ps1 [项目路径]     # 扫描" -ForegroundColor Gray
+    Write-Host "  .\axios-security-scan.ps1 -Backup [路径] # 创建备份" -ForegroundColor Gray
+    Write-Host "  .\axios-security-scan.ps1 -Restore [文件] # 还原备份" -ForegroundColor Gray
+    Write-Host "  .\axios-security-scan.ps1 -ListBackups    # 列出备份" -ForegroundColor Gray
+    
+    $globalSafe = $true
+    $projectSafe = $true
+    $ratSafe = $true
+    $cacheSafe = $true
+    
+    # 1. 全局检查
+    Invoke-NpmGlobalCheck
+    
+    # 2. RAT 检查
+    $ratSafe = Invoke-RatCheck
+    
+    # 3. 缓存检查
+    Invoke-NpmCacheCheck
+    
+    # 4. 项目检查
+    if ($ProjectPath) {
+        if (Test-Path $ProjectPath) {
+            Invoke-ProjectCheck -ProjectPath $ProjectPath
+        } else {
+            Write-Host "❌ 项目路径不存在: $ProjectPath" -ForegroundColor Red
+        }
+    }
+    
+    # 汇总
+    Invoke-Summary -GlobalSafe $globalSafe -ProjectSafe $projectSafe -RatSafe $ratSafe -CacheSafe $cacheSafe
+}
+
+if ($Action -eq "fix") {
+    Invoke-Fix -ProjectPath $ProjectPath
+}

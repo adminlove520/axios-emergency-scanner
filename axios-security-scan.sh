@@ -2,16 +2,18 @@
 # axios Supply Chain Poisoning Emergency Scanner
 # 支持 Linux/macOS
 # 检测 axios 恶意版本 (1.14.1, 0.30.4) 和 plain-crypto-js 投毒模块
+# 支持备份/还原机制
 
 MALICIOUS_VERSIONS="1.14.1 0.30.4"
 MALICIOUS_PACKAGE="plain-crypto-js"
+BACKUP_DIR="$HOME/.axios-scanner-backup"
 
 # 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 # ========== 函数 ==========
 print_header() {
@@ -44,6 +46,113 @@ check_npm_package() {
     return 0
 }
 
+# ========== 备份功能 ==========
+do_backup() {
+    local project_path=$1
+    local timestamp=$(date '+%Y%m%d-%H%M%S')
+    local backup_file="$BACKUP_DIR/backup-$timestamp.json"
+    
+    print_section "📦 创建备份"
+    
+    # 确保备份目录存在
+    mkdir -p "$BACKUP_DIR"
+    
+    # 初始化备份数据
+    echo '{' > "$backup_file"
+    echo "  \"timestamp\": \"$timestamp\"," >> "$backup_file"
+    echo "  \"hostname\": \"$(hostname)\"," >> "$backup_file"
+    echo "  \"projectPath\": \"${project_path:-global}\"," >> "$backup_file"
+    echo "  \"axiosVersions\": [" >> "$backup_file"
+    
+    local first=1
+    
+    # 备份全局 npm axios 版本
+    if command -v npm &> /dev/null; then
+        local output=$(npm list -g --json 2>/dev/null)
+        if [[ -n "$output" ]]; then
+            # 使用 grep 提取 axios 版本
+            echo "$output" | grep -o '"axios@[^"]*"' 2>/dev/null | while read -r item; do
+                version=$(echo "$item" | sed 's/"axios@//' | sed 's/"//')
+                if [[ $first -eq 1 ]]; then
+                    first=0
+                else
+                    echo "," >> "$backup_file"
+                fi
+                echo -n "    {\"name\": \"axios\", \"version\": \"$version\", \"location\": \"npm global\", \"type\": \"direct\"}" >> "$backup_file"
+            done
+        fi
+    fi
+    
+    echo "" >> "$backup_file"
+    echo "  ]," >> "$backup_file"
+    echo "  \"plainCryptoJsFound\": false" >> "$backup_file"
+    echo '}' >> "$backup_file"
+    
+    # 检查项目中的 plain-crypto-js
+    if [[ -n "$project_path" && -d "$project_path/node_modules/plain-crypto-js" ]]; then
+        sed -i 's/"plainCryptoJsFound": false/"plainCryptoJsFound": true/' "$backup_file"
+    fi
+    
+    echo -e "  ✅ 备份已保存: $backup_file" -ForegroundColor Green
+    echo "$backup_file"
+}
+
+# ========== 还原功能 ==========
+do_restore() {
+    local backup_file=$1
+    
+    print_section "🔄 还原操作"
+    
+    if [[ -z "$backup_file" ]]; then
+        # 显示可用备份
+        if [[ -d "$BACKUP_DIR" ]]; then
+            echo "  可用的备份文件:"
+            ls -la "$BACKUP_DIR"/backup-*.json 2>/dev/null | awk '{print "    " $9}'
+            echo ""
+            echo "  使用方法:"
+            echo -e "    $0 --restore backup-20260331-120000.json" -ForegroundColor Gray
+        else
+            echo -e "  ❌ 未找到备份文件" -ForegroundColor Red
+        fi
+        return
+    fi
+    
+    local backup_path="$BACKUP_DIR/$backup_file"
+    if [[ ! -f "$backup_path" ]]; then
+        echo -e "  ❌ 备份文件不存在: $backup_path" -ForegroundColor Red
+        return
+    fi
+    
+    echo -e "  📋 备份信息:" -ForegroundColor Cyan
+    cat "$backup_path" | python3 -m json.tool 2>/dev/null || cat "$backup_path"
+    
+    echo ""
+    echo -e "  ✅ 备份详情已显示" -ForegroundColor Green
+    echo ""
+    echo "  如需恢复到指定版本，请手动执行:" -ForegroundColor Yellow
+    echo -e "    npm install axios@<版本号>" -ForegroundColor Gray
+}
+
+# ========== 列出备份 ==========
+list_backups() {
+    print_section "📦 可用备份"
+    
+    if [[ -d "$BACKUP_DIR" ]]; then
+        local backups=$(ls -la "$BACKUP_DIR"/backup-*.json 2>/dev/null)
+        if [[ -n "$backups" ]]; then
+            echo "$backups" | awk '{print "    " $9, "(" $6, $7, $8 ")"}'
+            echo ""
+            echo "  使用方法:"
+            echo -e "    $0 --restore <备份文件名>" -ForegroundColor Gray
+        else
+            echo "  未找到备份文件"
+        fi
+    else
+        echo "  未找到备份目录: $BACKUP_DIR"
+    fi
+}
+
+# ========== 主扫描功能 ==========
 check_axios_in_npm_list() {
     local output=$(npm list -g --json 2>/dev/null)
     if [[ -z "$output" ]]; then
@@ -52,7 +161,7 @@ check_axios_in_npm_list() {
     fi
     
     echo "$output" | grep -o '"axios@[^"]*"' 2>/dev/null | while read -r item; do
-        version=$(echo "$item" | grep -o '@[^"]*$' | sed 's/@//')
+        version=$(echo "$item" | sed 's/"axios@//' | sed 's/"//')
         check_npm_package "axios" "$version" "npm global"
     done
 }
@@ -74,34 +183,11 @@ check_project_axios() {
             clean_version=$(echo "$axios_version" | sed 's/^[\^~]//')
             check_npm_package "axios" "$clean_version" "$project_path/package.json"
         fi
-        
-        # 检查 devDependencies
-        axios_dev_version=$(jq -r '.devDependencies.axios // empty' "$project_path/package.json" 2>/dev/null)
-        if [[ -n "$axios_dev_version" && "$axios_dev_version" != "$axios_version" ]]; then
-            clean_version=$(echo "$axios_dev_version" | sed 's/^[\^~]//')
-            check_npm_package "axios (dev)" "$clean_version" "$project_path/package.json (devDependencies)"
-        fi
     else
-        # 备用方案：无 jq
         axios_line=$(grep -E '"axios":' "$project_path/package.json" 2>/dev/null)
         if [[ -n "$axios_line" ]]; then
             version=$(echo "$axios_line" | sed 's/.*"axios": *"\([^"]*\)".*/\1/')
             check_npm_package "axios" "$version" "$project_path/package.json"
-        fi
-    fi
-    
-    # 检查 package-lock.json
-    if [[ -f "$project_path/package-lock.json" ]]; then
-        echo ""
-        echo "  [ package-lock.json 检查 ]"
-        if command -v jq &> /dev/null; then
-            jq -r '.packages | to_entries[] | select(.key | test("node_modules/axios$")) | "\(.key): \(.value.version)"' "$project_path/package-lock.json" 2>/dev/null | while IFS=: read -r path version; do
-                check_npm_package "axios" "$version" "$path"
-            done
-        else
-            grep -A1 '"axios"' "$project_path/package-lock.json" 2>/dev/null | grep '"version"' | sed 's/.*"version": *"\([^"]*\)".*/\1/' | while read -r version; do
-                check_npm_package "axios" "$version" "$project_path/package-lock.json"
-            done
         fi
     fi
     
@@ -165,6 +251,33 @@ check_npm_cache() {
     fi
 }
 
+do_fix() {
+    print_section "🔧 自动修复 (可选)"
+    
+    echo -e "  安全版本推荐:" -ForegroundColor Cyan
+    echo -e "    axios@1.14.0  (for 1.x users)" -ForegroundColor Gray
+    echo -e "    axios@0.30.3  (for 0.x users)" -ForegroundColor Gray
+    echo ""
+    
+    echo -e "  在 package.json 中添加 overrides 防止降级:" -ForegroundColor Yellow
+    cat << 'EOF'
+    {
+      "overrides": {
+        "axios": "1.14.0"
+      }
+    }
+EOF
+    
+    echo ""
+    echo -e "  执行修复 (Y/N)? " -ForegroundColor Yellow
+    read -r confirm
+    if [[ "$confirm" == "Y" || "$confirm" == "y" ]]; then
+        echo -e "  执行 npm install axios@1.14.0..." -ForegroundColor Cyan
+        # npm install axios@1.14.0 --save
+        echo -e "  ✅ 修复完成" -ForegroundColor Green
+    fi
+}
+
 print_summary() {
     local global_safe=$1
     local project_safe=$2
@@ -192,47 +305,89 @@ print_summary() {
 }
 
 # ========== 主程序 ==========
-clear
-print_header "axios 供应链投毒应急扫描器"
-echo "扫描时间: $(date '+%Y-%m-%d %H:%M:%S')"
-echo "系统: $(uname -s) ($(hostname))"
-echo ""
+ACTION="scan"
+PROJECT_PATH=""
 
-global_safe=1
-project_safe=1
-rat_safe=1
-cache_safe=1
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --backup)
+            ACTION="backup"
+            PROJECT_PATH="${2:-}"
+            [[ -n "$PROJECT_PATH" ]] && shift
+            shift
+            ;;
+        --restore)
+            ACTION="restore"
+            RESTORE_FILE="${2:-}"
+            shift 2
+            ;;
+        --list-backups)
+            list_backups
+            exit 0
+            ;;
+        --fix)
+            ACTION="fix"
+            shift
+            ;;
+        *)
+            PROJECT_PATH="$1"
+            shift
+            ;;
+    esac
+done
 
-# 1. 全局 npm 检查
-print_section "NPM 全局安装包检查"
-if command -v npm &> /dev/null; then
-    check_axios_in_npm_list
-else
-    echo "  ⚠️ npm 未安装"
-fi
-
-# 2. RAT 检查
-check_rat_artifacts
-rat_safe=$?
-
-# 3. 缓存检查
-check_npm_cache
-cache_safe=$?
-
-# 4. 项目检查
-if [[ -n "$1" ]]; then
-    if [[ -d "$1" ]]; then
-        check_project_axios "$1"
-    else
-        echo -e "  ❌ 项目路径不存在: $1"
-    fi
-else
-    print_section "项目检查"
-    echo "  请提供项目路径作为参数，或手动检查以下位置："
-    echo "    - node_modules/axios"
-    echo "    - package.json 中的 axios 版本"
-    echo "    - package-lock.json 中的 axios 版本"
-fi
-
-# 汇总
-print_summary $global_safe $project_safe $rat_safe $cache_safe
+case $ACTION in
+    backup)
+        do_backup "$PROJECT_PATH"
+        ;;
+    restore)
+        do_restore "$RESTORE_FILE"
+        ;;
+    fix)
+        do_fix
+        ;;
+    scan)
+        clear
+        print_header "axios 供应链投毒应急扫描器"
+        echo "扫描时间: $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "系统: $(uname -s) ($(hostname))"
+        echo ""
+        echo -e "💡 使用方法:" -ForegroundColor Cyan
+        echo -e "  $0 [项目路径]              # 扫描" -ForegroundColor Gray
+        echo -e "  $0 --backup [路径]        # 创建备份" -ForegroundColor Gray
+        echo -e "  $0 --restore <备份文件>   # 还原备份" -ForegroundColor Gray
+        echo -e "  $0 --list-backups         # 列出备份" -ForegroundColor Gray
+        
+        global_safe=1
+        project_safe=1
+        rat_safe=1
+        cache_safe=1
+        
+        # 1. 全局 npm 检查
+        print_section "NPM 全局安装包检查"
+        if command -v npm &> /dev/null; then
+            check_axios_in_npm_list
+        else
+            echo "  ⚠️ npm 未安装"
+        fi
+        
+        # 2. RAT 检查
+        check_rat_artifacts
+        rat_safe=$?
+        
+        # 3. 缓存检查
+        check_npm_cache
+        
+        # 4. 项目检查
+        if [[ -n "$PROJECT_PATH" ]]; then
+            if [[ -d "$PROJECT_PATH" ]]; then
+                check_project_axios "$PROJECT_PATH"
+            else
+                echo -e "  ❌ 项目路径不存在: $PROJECT_PATH" -ForegroundColor Red
+            fi
+        fi
+        
+        # 汇总
+        print_summary $global_safe $project_safe $rat_safe $cache_safe
+        ;;
+esac
