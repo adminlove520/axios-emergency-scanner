@@ -858,7 +858,7 @@ async function runAudit(scanRoot, options) {
 program
     .name('axios-scan')
     .description('axios & OpenClaw 供应链投毒事件应急审计工具')
-    .version('1.5.0')
+    .version('1.5.4')
     .argument('[path]', '待扫描的路径', '.')
     .option('--fix', '自动修复发现的 axios 投毒版本')
     .option('--json [file]', '生成 JSON 审计报告')
