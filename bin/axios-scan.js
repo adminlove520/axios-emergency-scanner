@@ -804,7 +804,7 @@ function generateMarkdownReport(results) {
     md += `- **重要**: 立即更换所有服务器凭据、NPM 发布 Token、数据库密码等敏感信息。\n\n`;
 
     md += `---\n`;
-    md += `*报告生成工具: axios-emergency-scanner v${results.version || '1.5.0'}*\n`;
+    md += `*报告生成工具: axios-emergency-scanner v${results.version || pkg.version}*\n`;
     
     return md;
 }
@@ -871,7 +871,7 @@ program
     .action(async (targetPath, options) => {
         const scanRoot = targetPath === '.' ? process.cwd() : path.resolve(targetPath);
         
-        printHeader('axios & OpenClaw 供应链投毒应急审计工具 v1.5.0');
+        printHeader(`axios & OpenClaw 供应链投毒应急审计工具 v${pkg.version}`);
         console.log(`执行时间: ${new Date().toLocaleString()}\n运行环境: ${process.platform} (${os.hostname()})`);
         
         if (options.watch) {
@@ -892,7 +892,7 @@ program
                     if (options.md) {
                         const ts = new Date().getTime();
                         const results = {
-                            version: '1.5.2-watch',
+                            version: `${pkg.version}-watch`,
                             timestamp: new Date().toISOString(),
                             activeConnections: connResult,
                             dnsCache: dnsResult,
