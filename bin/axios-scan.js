@@ -482,13 +482,15 @@ program
         }
 
         if (options.json) {
-            const jsonPath = typeof options.json === 'string' ? options.json : 'axios-security-report.json';
+            const defaultName = 'axios-security-report.json';
+            const jsonPath = typeof options.json === 'string' ? options.json : path.join(scanRoot, defaultName);
             fs.writeFileSync(jsonPath, JSON.stringify(results, null, 2));
             console.log(chalk.cyan(`\n📋 详细 JSON 报告已保存至: ${jsonPath}`));
         }
 
         if (options.md) {
-            const mdPath = typeof options.md === 'string' ? options.md : 'axios-security-report.md';
+            const defaultName = 'axios-security-report.md';
+            const mdPath = typeof options.md === 'string' ? options.md : path.join(scanRoot, defaultName);
             const mdContent = generateMarkdownReport(results);
             fs.writeFileSync(mdPath, mdContent);
             console.log(chalk.cyan(`\n📑 精美 Markdown 审计报告已保存至: ${mdPath}`));
