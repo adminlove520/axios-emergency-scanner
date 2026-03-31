@@ -361,53 +361,80 @@ function checkActiveConnections() {
             output = execSync('netstat -ano', { stdio: ['ignore', 'pipe', 'ignore'] }).toString();
             const lines = output.split('\n');
             for (const line of lines) {
-                const parts = line.trim().split(/\s+/);
-                if (parts.length < 5) continue;
-                const remoteAddr = parts[2];
-                const pid = parts[4];
+                const trimmedLine = line.trim();
+                if (!trimmedLine) continue;
+
+                const parts = trimmedLine.split(/\s+/);
+                // 即使没有 PID (parts.length < 5)，只要匹配到特征也应该报警
+                const remoteAddr = parts[2] || '';
+                const pid = parts[4] || 'Unknown';
                 
+                let matched = false;
+                let matchType = '';
+                let matchTarget = '';
+
                 for (const domain of MALICIOUS_DOMAINS) {
-                    if (line.includes(domain) || remoteAddr.includes(domain)) {
-                        const filePath = getProcessPath(pid);
-                        console.log(chalk.red(`  ❌ 发现活动外联: ${remoteAddr} (PID: ${pid})`));
-                        console.log(chalk.red(`     落地文件: ${filePath}`));
-                        result.connections.push({ domain, remoteAddr, pid, filePath, raw: line.trim() });
-                        result.safe = false;
+                    if (trimmedLine.includes(domain)) {
+                        matched = true;
+                        matchType = 'Domain';
+                        matchTarget = domain;
+                        break;
                     }
                 }
-                for (const ip of MALICIOUS_IPS) {
-                    if (remoteAddr.includes(ip)) {
-                        const filePath = getProcessPath(pid);
-                        console.log(chalk.red(`  ❌ 发现活动 IP 外联: ${remoteAddr} (PID: ${pid})`));
-                        console.log(chalk.red(`     落地文件: ${filePath}`));
-                        result.connections.push({ domain: 'Known Malicious IP', remoteAddr, pid, filePath, raw: line.trim() });
-                        result.safe = false;
-                    }
-                }
-            }
-        } else {
-            // Linux/macOS 使用 ss 或 lsof 效果更好
-            try {
-                output = execSync('lsof -i -n -P | grep ESTABLISHED', { stdio: ['ignore', 'pipe', 'ignore'] }).toString();
-                const lines = output.split('\n');
-                for (const line of lines) {
-                    for (const domain of MALICIOUS_DOMAINS) {
-                        if (line.includes(domain)) {
-                            const parts = line.trim().split(/\s+/);
-                            const procName = parts[0];
-                            const pid = parts[1];
-                            const remote = parts[8];
-                            const filePath = getProcessPath(pid);
-                            console.log(chalk.red(`  ❌ 发现活动外联: ${remote} (进程: ${procName}, PID: ${pid})`));
-                            console.log(chalk.red(`     落地文件: ${filePath}`));
-                            result.connections.push({ domain, remoteAddr: remote, pid, filePath, raw: line.trim() });
-                            result.safe = false;
+                
+                if (!matched) {
+                    for (const ip of MALICIOUS_IPS) {
+                        if (trimmedLine.includes(ip)) {
+                            matched = true;
+                            matchType = 'IP';
+                            matchTarget = ip;
+                            break;
                         }
                     }
                 }
-            } catch (e) {
-                // Fallback to netstat if lsof fails
+
+                if (matched) {
+                    const filePath = pid !== 'Unknown' ? getProcessPath(pid) : 'Cannot resolve without PID';
+                    console.log(chalk.red(`  ❌ [${matchType}] 发现活动外联: ${matchTarget}`));
+                    console.log(chalk.red(`     详情: ${trimmedLine}`));
+                    if (pid !== 'Unknown') console.log(chalk.red(`     落地文件: ${filePath} (PID: ${pid})`));
+                    
+                    result.connections.push({ 
+                        domain: matchType === 'Domain' ? matchTarget : 'Known Malicious IP', 
+                        remoteAddr: matchTarget, 
+                        pid, 
+                        filePath, 
+                        raw: trimmedLine 
+                    });
+                    result.safe = false;
+                }
             }
+        } else {
+            // Linux/macOS 部分逻辑同步优化
+            try {
+                output = execSync('lsof -i -n -P | grep -E "ESTABLISHED|SYN_SENT"', { stdio: ['ignore', 'pipe', 'ignore'] }).toString();
+                const lines = output.split('\n');
+                for (const line of lines) {
+                    const trimmedLine = line.trim();
+                    if (!trimmedLine) continue;
+
+                    let matched = false;
+                    for (const domain of MALICIOUS_DOMAINS) { if (trimmedLine.includes(domain)) { matched = true; break; } }
+                    for (const ip of MALICIOUS_IPS) { if (trimmedLine.includes(ip)) { matched = true; break; } }
+
+                    if (matched) {
+                        const parts = trimmedLine.split(/\s+/);
+                        const procName = parts[0];
+                        const pid = parts[1];
+                        const remote = parts[8];
+                        const filePath = getProcessPath(pid);
+                        console.log(chalk.red(`  ❌ 发现活动外联: ${remote} (进程: ${procName}, PID: ${pid})`));
+                        console.log(chalk.red(`     落地文件: ${filePath}`));
+                        result.connections.push({ domain: 'Detected Malicious', remoteAddr: remote, pid, filePath, raw: trimmedLine });
+                        result.safe = false;
+                    }
+                }
+            } catch (e) {}
         }
     } catch (e) {
         console.log(chalk.gray('  Skip: 无法执行网络审计 (可能需要管理员权限)'));
@@ -723,17 +750,16 @@ program
             
             // 后续仅监听网络和系统
             setInterval(async () => {
-                console.log(chalk.gray(`\n[${new Date().toLocaleTimeString()}] 执行周期性网络连接审计...`));
                 const connResult = checkActiveConnections();
                 const dnsResult = checkDnsCache();
                 
                 if (!connResult.safe || !dnsResult.safe) {
-                    console.log(chalk.red('\n🔥 警告：在监听过程中发现新的恶意网络活动！'));
+                    console.log(chalk.red(`\n[${new Date().toLocaleTimeString()}] 🔥 警报：检测到恶意网络活动！`));
                     // 发现威胁时自动生成一份带时间戳的增量报告
                     if (options.md) {
                         const ts = new Date().getTime();
                         const results = {
-                            version: '1.5.0-watch',
+                            version: '1.5.1-watch',
                             timestamp: new Date().toISOString(),
                             activeConnections: connResult,
                             dnsCache: dnsResult,
