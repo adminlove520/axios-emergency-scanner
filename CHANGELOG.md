@@ -2,6 +2,18 @@
 
 所有对 `axios-emergency-scanner` 的重要更改都记录在本文档中。
 
+## [1.3.0] - 2026-03-31
+
+### ✨ 新特性
+- **OpenClaw 专项检测**:
+    - 增加了对恶意包 `openclaw`、`open-claw`、`@openclaw/core` 等的专项扫描。
+    - 增加了对 OpenClaw 恶意域名的检测（如 `open-claw.com`, `claw-sync.net` 等）。
+    - 增加了系统级 OpenClaw 留痕检测（如 `~/.openclaw` 目录）。
+- **增强的修复逻辑**:
+    - `--fix` 模式下现在会自动移除所有识别出的 OpenClaw 相关恶意依赖。
+- **脚本同步更新**:
+    - `scripts/` 下的 Bash 和 PowerShell 脚本均已同步 OpenClaw 检测逻辑。
+
 ## [1.2.0] - 2026-03-31
 
 ### ✨ 新特性

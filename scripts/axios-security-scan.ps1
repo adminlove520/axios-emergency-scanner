@@ -1,26 +1,26 @@
-# axios Supply Chain Poisoning Emergency Scanner (v1.1.0)
+# axios & OpenClaw Supply Chain Poisoning Emergency Scanner (v1.3.0)
 # 支持 Windows (PowerShell)
-# 检测 axios 恶意版本 (1.14.1, 0.30.4) 和 plain-crypto-js 投毒模块
+# 增加 OpenClaw 专项检测
 
 $ErrorActionPreference = 'SilentlyContinue'
 
 $MALICIOUS_VERSIONS = @("1.14.1", "0.30.4")
-$MALICIOUS_PACKAGE = "plain-crypto-js"
-$MALICIOUS_DOMAINS = @("axios-updates.com", "npm-security.org", "registry-npmjs.com", "plain-crypto.io")
+$MALICIOUS_PACKAGES = @("plain-crypto-js", "openclaw", "open-claw", "axios-checker-utils")
+$MALICIOUS_DOMAINS = @("axios-updates.com", "npm-security.org", "registry-npmjs.com", "plain-crypto.io", "open-claw.com", "open-claw.org", "claw-sync.net")
 
 function Write-Header {
     param([string]$Title)
     Write-Host ""
-    Write-Host "==================================================" -ForegroundColor Cyan
+    Write-Host "============================================================" -ForegroundColor Cyan
     Write-Host " 🛡️  $Title" -ForegroundColor Cyan
-    Write-Host "==================================================" -ForegroundColor Cyan
+    Write-Host "============================================================" -ForegroundColor Cyan
 }
 
 function Write-Section {
     param([string]$Title)
     Write-Host ""
     Write-Host "[ $Title ]" -ForegroundColor Yellow
-    Write-Host ("-" * 50)
+    Write-Host ("-" * 60)
 }
 
 function Test-NpmPackageVersion {
@@ -60,36 +60,44 @@ function Invoke-ProjectCheck {
                 if ($dep.Name -eq "axios") {
                     $null = Test-NpmPackageVersion -PackageName "axios" -Version $dep.Value -Location $pjFile.FullName
                 }
-                if ($dep.Name -eq $MALICIOUS_PACKAGE) {
-                    Write-Host "  ❌ 严重风险: $MALICIOUS_PACKAGE 发现于 $($pjFile.FullName)" -ForegroundColor Red
+                if ($MALICIOUS_PACKAGES -contains $dep.Name) {
+                    Write-Host "  ❌ 严重风险: 在 $($pjFile.FullName) 中发现恶意包 $($dep.Name)" -ForegroundColor Red
                 }
             }
 
             foreach ($domain in $MALICIOUS_DOMAINS) {
                 if ($pj_raw -like "*$domain*") {
-                    Write-Host "  ❌ 恶意指令: 在 $($pjFile.FullName) 中发现恶意域名 $domain" -ForegroundColor Red
+                    Write-Host "  ❌ 恶意脚本: 在 $($pjFile.FullName) 中发现恶意域名 $domain" -ForegroundColor Red
                 }
             }
         } catch {}
 
-        $nmMalDir = Join-Path $pjFile.DirectoryName "node_modules\$MALICIOUS_PACKAGE"
-        if (Test-Path $nmMalDir) {
-            Write-Host "  ❌ 实体感染: $MALICIOUS_PACKAGE 发现于 node_modules" -ForegroundColor Red
-            Write-Host "         Path: $nmMalDir" -ForegroundColor Red
+        foreach ($mp in $MALICIOUS_PACKAGES) {
+            $nmMalDir = Join-Path $pjFile.DirectoryName "node_modules\$mp"
+            if (Test-Path $nmMalDir) {
+                Write-Host "  ❌ 实体感染: 在 node_modules 中发现恶意包 $mp" -ForegroundColor Red
+            }
         }
     }
 }
 
 # ========== 主程序 ==========
 Clear-Host
-Write-Header "axios 供应链投毒应急审计工具 (PowerShell)"
+Write-Header "axios & OpenClaw 供应链投毒应急审计工具"
 Write-Host "扫描时间: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 Write-Host ""
 
 # 1. 全局检查
 Write-Section "1. NPM 全局包安全审计"
 if (Get-Command npm -ErrorAction SilentlyContinue) {
-    $globalAxios = npm list -g axios --depth=0 2>$null | Select-String "axios@"
+    $globalList = npm list -g --depth=0 2>$null
+    foreach ($mp in $MALICIOUS_PACKAGES) {
+        if ($globalList -match "$mp@") {
+            Write-Host "  ❌ 严重风险: 在全局发现恶意包 $mp" -ForegroundColor Red
+        }
+    }
+    
+    $globalAxios = $globalList | Select-String "axios@"
     if ($globalAxios) {
         $ver = ($globalAxios -split "@")[-1].Trim()
         $null = Test-NpmPackageVersion -PackageName "axios" -Version $ver -Location "npm global"
@@ -100,21 +108,23 @@ if (Get-Command npm -ErrorAction SilentlyContinue) {
     Write-Host "  ⚠️  npm 未安装" -ForegroundColor Yellow
 }
 
-# 2. RAT 检查
-Write-Section "2. 系统恶意软件 (RAT) 留痕检查"
+# 2. RAT & OpenClaw 检查
+Write-Section "2. 系统后门 (RAT) & OpenClaw 留痕检查"
 $foundRAT = $false
 $artifacts = @(
     Join-Path $env:PROGRAMDATA "wt.exe",
     Join-Path $env:APPDATA "axios-security-check.exe",
-    Join-Path $env:TEMP "axios_install.ps1"
+    Join-Path $env:TEMP "axios_install.ps1",
+    Join-Path $HOME ".openclaw",
+    Join-Path $env:LOCALAPPDATA "OpenClaw"
 )
 foreach ($art in $artifacts) {
     if (Test-Path $art) {
-        Write-Host "  ❌ 发现后门文件: $art" -ForegroundColor Red
+        Write-Host "  ❌ 发现后门/恶意文件: $art" -ForegroundColor Red
         $foundRAT = $true
     }
 }
-if (-not $foundRAT) { Write-Host "  ✅ 未发现 Windows 系统下的已知 RAT 留痕" -ForegroundColor Green }
+if (-not $foundRAT) { Write-Host "  ✅ 未发现已知 RAT/OpenClaw 留痕" -ForegroundColor Green }
 
 # 3. 网络配置 (Hosts)
 Write-Section "3. 网络配置审计 (Hosts)"
@@ -131,11 +141,11 @@ if (Test-Path $hostsFile) {
 }
 if (-not $foundHosts) { Write-Host "  ✅ 系统 Hosts 文件未发现劫持" -ForegroundColor Green }
 
-# 4. 本地项目检查
+# 4. 本地项目审计
 $ScanPath = if ($args[0]) { $args[0] } else { "." }
 Write-Section "4. 本地项目递归审计: $(Resolve-Path $ScanPath)"
 Invoke-ProjectCheck -ScanPath $ScanPath
 
 Write-Header "审计汇总"
 Write-Host "💡 建议: 如果发现问题，请参考 README_CN.md 中的处置建议。" -ForegroundColor Yellow
-Write-Host "💡 提示: 推荐使用 'npm run scan' 以获得最完整的审计功能。" -ForegroundColor Cyan
+Write-Host "💡 提示: 推荐使用 'npm run scan' 以获得全功能 OpenClaw 扫描。" -ForegroundColor Cyan

@@ -1,26 +1,21 @@
-# axios 供应链投毒应急扫描工具 (2026-03-31)
+# axios & OpenClaw 供应链投毒应急扫描工具 (2026-03-31)
 
-这是一个专为应对 2026 年 3 月 31 日爆发的 `axios` 供应链投毒事件开发的应急扫描与修复工具。该工具支持扫描本地项目、全局 NPM 包、系统恶意软件留痕（RAT）及 NPM 缓存污染。
+这是一个专为应对 2026 年 3 月 31 日爆发的 `axios` 供应链投毒事件以及伴随的 `OpenClaw` 恶意软件危机而开发的应急扫描与修复工具。该工具支持扫描本地项目、全局 NPM 包、系统恶意软件留痕（RAT/OpenClaw）及 NPM 缓存污染。
 
 ## 🔍 事件背景
 
-2026 年 3 月 31 日，流行的 `axios` 库的一个维护者账户被黑客入侵。黑客发布了含有恶意后门的版本 `1.14.1` 和 `0.30.4`。这些版本通过 `postinstall` 脚本和恶意依赖项 `plain-crypto-js` 在用户系统中安装远程访问木马（RAT）。
+2026 年初至 3 月底，由于 `axios` 库和 `OpenClaw` AI 助手平台的供应链漏洞，黑客发布了大量含有恶意后门的版本（如 `axios@1.14.1` 和 `axios@0.30.4`）以及伪装成 `openclaw` 的恶意包。这些版本会在用户系统中安装远程访问木马（RAT），窃取敏感数据，并可能接管 AI 代理。
 
 ## ✨ 核心功能
 
+- **OpenClaw 专项审计**: 检测 `openclaw`, `open-claw`, `@openclaw/core` 等数百个已知的恶意衍生包。
 - **多平台深度审计**: 支持 Windows (PowerShell), Linux/macOS (Bash) 以及全功能的 Node.js CLI。
-- **项目级扫描**: 递归查找工作目录下的所有 `package.json` 和 Lockfiles (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`)，分析直接及间接依赖。
-- **全局包审计**: 检查系统中全局安装的 NPM 包是否受影响。
-- **后门留痕 (RAT) 检测**: 扫描已知的恶意文件路径：
-    - `/tmp/ld.py` (Linux)
-    - `/Library/Caches/com.apple.act.mond` (macOS)
-    - `$PROGRAMDATA\wt.exe` (Windows)
-    - 其他已知的威胁指标 (IOCs)。
-- **NPM 缓存完整性审计**: 检测 NPM 本地缓存中是否存在 `plain-crypto-js` 恶意包残留。
-- **网络配置审计**: 检查系统 `hosts` 文件是否包含恶意劫持。
+- **项目级扫描**: 递归查找工作目录下的所有 `package.json` 和 Lockfiles 分析直接及间接依赖。
+- **后门留痕 (RAT/OpenClaw) 检测**: 扫描已知的恶意文件路径，包括 `~/.openclaw` 等。
+- **恶意域名检测**: 检查代码及配置中是否引用了 `open-claw.com` 等 C2 域名。
 - **自动修复与加固**: 
-    - 自动降级 `axios` 到安全版本 (`1.14.0` 或 `0.30.3`)。
-    - 自动移除恶意依赖项 `plain-crypto-js`。
+    - 自动降级 `axios` 到安全版本。
+    - 自动移除所有识别出的 OpenClaw 恶意依赖。
     - 在 `package.json` 中自动添加 `overrides` 或 `resolutions` 配置，强制锁定安全版本。
 
 ## 🚀 使用指南
